@@ -1,111 +1,111 @@
-import crypto from "crypto";
-import path from "path";
-import fs from "fs/promises";
+import crypto from "node:crypto";
+import path from "node:path";
 
 import config from "../config.js";
 import {
+  createProject,
   getProject,
   getUserProjects,
-  createProject,
   updateProject,
   deleteProject
 } from "../database.js";
 
-// ─────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────
+export const PROJECT_LIMITS = {
+  maxProjectsPerUser: 10,
 
-const MAX_PROJECTS_PER_USER = 10;
+  maxProjectNameLength: 50,
 
-const ALLOWED_EXTENSIONS = new Set([
-  ".html",
-  ".htm",
-  ".css",
-  ".js",
-  ".mjs",
-  ".json",
-  ".txt",
-  ".xml",
-  ".svg",
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".webp",
-  ".ico",
-  ".avif",
-  ".woff",
-  ".woff2",
-  ".ttf",
-  ".otf",
-  ".mp3",
-  ".mp4",
-  ".webm"
-]);
+  statuses: [
+    "pending",
+    "deploying",
+    "active",
+    "failed",
+    "suspended",
+    "deleted"
+  ],
 
-// ─────────────────────────────────────────────
-// CREATE ID
-// ─────────────────────────────────────────────
+  allowedExtensions: [
+    ".html",
+    ".htm",
+    ".css",
+    ".js",
+    ".mjs",
+    ".json",
+    ".txt",
+    ".xml",
+    ".svg",
 
-function generateProjectId() {
-  return crypto.randomUUID();
-}
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".ico",
+    ".avif",
 
-// ─────────────────────────────────────────────
-// CREATE SLUG
-// ─────────────────────────────────────────────
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
 
-export function createSlug(name) {
-  const base = String(name || "website")
+    ".mp3",
+    ".mp4",
+    ".webm"
+  ]
+};
+
+/**
+ * Generate a URL-safe slug.
+ */
+export function createSlug(value) {
+  return String(value || "website")
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
     .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 40);
-
-  const random = crypto.randomBytes(3).toString("hex");
-
-  return `${base || "website"}-${random}`;
+    .slice(0, 45);
 }
 
-// ─────────────────────────────────────────────
-// SANITIZE PROJECT NAME
-// ─────────────────────────────────────────────
-
+/**
+ * Sanitize project name.
+ */
 export function sanitizeProjectName(name) {
   return String(name || "")
     .trim()
     .replace(/\s+/g, " ")
-    .slice(0, 50);
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "")
+    .slice(0, PROJECT_LIMITS.maxProjectNameLength);
 }
 
-// ─────────────────────────────────────────────
-// VALIDATE PROJECT NAME
-// ─────────────────────────────────────────────
-
+/**
+ * Validate project name.
+ */
 export function validateProjectName(name) {
   const cleanName = sanitizeProjectName(name);
 
   if (!cleanName) {
     return {
       valid: false,
-      error: "Project name is required."
+      message: "Project name cannot be empty."
     };
   }
 
   if (cleanName.length < 2) {
     return {
       valid: false,
-      error: "Project name must contain at least 2 characters."
+      message: "Project name must contain at least 2 characters."
     };
   }
 
-  if (cleanName.length > 50) {
+  if (
+    cleanName.length >
+    PROJECT_LIMITS.maxProjectNameLength
+  ) {
     return {
       valid: false,
-      error: "Project name cannot exceed 50 characters."
+      message:
+        `Project name cannot exceed ${PROJECT_LIMITS.maxProjectNameLength} characters.`
     };
   }
 
@@ -115,56 +115,85 @@ export function validateProjectName(name) {
   };
 }
 
-// ─────────────────────────────────────────────
-// USER PROJECT LIMIT
-// ─────────────────────────────────────────────
-
+/**
+ * Check whether the user can create another project.
+ */
 export async function canCreateProject(userId) {
-  const projects = await getUserProjects(userId);
+  const projects = await getUserProjects(String(userId));
+
+  const activeProjects = projects.filter(
+    (project) => project.status !== "deleted"
+  );
 
   return {
-    allowed: projects.length < MAX_PROJECTS_PER_USER,
-    current: projects.length,
-    limit: MAX_PROJECTS_PER_USER
+    allowed:
+      activeProjects.length <
+      PROJECT_LIMITS.maxProjectsPerUser,
+
+    current: activeProjects.length,
+
+    limit: PROJECT_LIMITS.maxProjectsPerUser
   };
 }
 
-// ─────────────────────────────────────────────
-// FILE EXTENSION VALIDATION
-// ─────────────────────────────────────────────
+/**
+ * Check allowed website file extension.
+ */
+export function isAllowedFile(fileName) {
+  const extension = path
+    .extname(String(fileName || ""))
+    .toLowerCase();
 
-export function isAllowedFile(filePath) {
-  const extension = path.extname(filePath).toLowerCase();
-
-  return ALLOWED_EXTENSIONS.has(extension);
+  return PROJECT_LIMITS.allowedExtensions.includes(
+    extension
+  );
 }
 
-// ─────────────────────────────────────────────
-// PROJECT FILE VALIDATION
-// ─────────────────────────────────────────────
+/**
+ * Validate extracted project directory.
+ */
+export async function validateProjectDirectory(
+  directory,
+  options = {}
+) {
+  const {
+    maxFiles = 500,
+    maxSizeMB = Number(
+      config.maxFileSizeMB || 50
+    )
+  } = options;
 
-export async function validateProjectDirectory(directory) {
-  const result = {
-    valid: false,
-    files: [],
-    totalSize: 0,
-    hasIndex: false,
-    errors: []
-  };
+  const fs = await import("node:fs/promises");
 
-  async function scan(currentDirectory) {
-    const entries = await fs.readdir(currentDirectory, {
-      withFileTypes: true
-    });
+  const maxSizeBytes =
+    maxSizeMB * 1024 * 1024;
+
+  let totalSize = 0;
+  let totalFiles = 0;
+  let hasIndex = false;
+
+  async function walk(currentDir) {
+    const entries = await fs.readdir(
+      currentDir,
+      {
+        withFileTypes: true
+      }
+    );
 
     for (const entry of entries) {
       const fullPath = path.join(
-        currentDirectory,
+        currentDir,
         entry.name
       );
 
+      if (entry.isSymbolicLink()) {
+        throw new Error(
+          `Symbolic links are not allowed: ${entry.name}`
+        );
+      }
+
       if (entry.isDirectory()) {
-        await scan(fullPath);
+        await walk(fullPath);
         continue;
       }
 
@@ -172,124 +201,186 @@ export async function validateProjectDirectory(directory) {
         continue;
       }
 
-      const relativePath = path
-        .relative(directory, fullPath)
-        .replace(/\\/g, "/");
+      totalFiles++;
 
-      // Prevent hidden/system files from becoming part of a hosted site.
-      if (
-        entry.name.startsWith(".") ||
-        relativePath.includes("/.")
-      ) {
-        continue;
-      }
-
-      if (!isAllowedFile(relativePath)) {
-        result.errors.push(
-          `Unsupported file type: ${relativePath}`
+      if (totalFiles > maxFiles) {
+        throw new Error(
+          `Project contains too many files. Maximum allowed: ${maxFiles}.`
         );
-
-        continue;
       }
 
-      const stats = await fs.stat(fullPath);
+      if (
+        entry.name.toLowerCase() ===
+        "index.html"
+      ) {
+        hasIndex = true;
+      }
 
-      result.files.push({
-        path: relativePath,
-        size: stats.size
-      });
+      if (!isAllowedFile(entry.name)) {
+        throw new Error(
+          `Unsupported file type: ${entry.name}`
+        );
+      }
 
-      result.totalSize += stats.size;
+      const stat = await fs.stat(fullPath);
 
-      if (relativePath.toLowerCase() === "index.html") {
-        result.hasIndex = true;
+      totalSize += stat.size;
+
+      if (totalSize > maxSizeBytes) {
+        throw new Error(
+          `Project files exceed the ${maxSizeMB} MB storage limit.`
+        );
       }
     }
   }
 
-  try {
-    await scan(directory);
-  } catch (error) {
-    result.errors.push(
-      `Unable to scan project: ${error.message}`
-    );
+  await walk(directory);
 
-    return result;
-  }
-
-  if (!result.hasIndex) {
-    result.errors.push(
-      "index.html is required in the project."
+  if (!hasIndex) {
+    throw new Error(
+      "index.html was not found in the website package."
     );
   }
 
-  const maxBytes =
-    config.maxFileSizeMB * 1024 * 1024;
-
-  if (result.totalSize > maxBytes) {
-    result.errors.push(
-      `Project exceeds the ${config.maxFileSizeMB} MB storage limit.`
-    );
-  }
-
-  result.valid = result.errors.length === 0;
-
-  return result;
+  return {
+    valid: true,
+    totalFiles,
+    totalSize,
+    hasIndex
+  };
 }
 
-// ─────────────────────────────────────────────
-// CREATE PROJECT
-// ─────────────────────────────────────────────
-
+/**
+ * Create/register a new project.
+ */
 export async function registerProject({
   userId,
   name,
-  size = 0,
-  files = 0,
-  url = null
+  description = ""
 }) {
-  const validation = validateProjectName(name);
+  const normalizedUserId = String(userId);
+
+  const validation =
+    validateProjectName(name);
 
   if (!validation.valid) {
-    throw new Error(validation.error);
+    throw new Error(validation.message);
   }
 
-  const permission = await canCreateProject(userId);
+  const permission =
+    await canCreateProject(
+      normalizedUserId
+    );
 
   if (!permission.allowed) {
     throw new Error(
-      `Project limit reached. Maximum ${permission.limit} projects allowed.`
+      `Project limit reached. You can host up to ${permission.limit} projects.`
     );
   }
 
-  const project = await createProject({
-    id: generateProjectId(),
-    userId,
-    name: validation.name,
-    slug: createSlug(validation.name),
+  const projectName =
+    validation.name;
+
+  const slug =
+    createSlug(projectName);
+
+  const projectId =
+    `p_${Date.now()}_${crypto
+      .randomBytes(4)
+      .toString("hex")}`;
+
+  const project = {
+    id: projectId,
+
+    userId: normalizedUserId,
+
+    name: projectName,
+
+    slug,
+
+    description:
+      String(description || "").slice(
+        0,
+        300
+      ),
+
     status: "pending",
-    size,
-    files,
-    url
-  });
 
-  return project;
+    provider: null,
+
+    providerProject: null,
+
+    url: null,
+
+    deploymentUrl: null,
+
+    deploymentId: null,
+
+    deploymentStatus: null,
+
+    fileCount: 0,
+
+    totalSize: 0,
+
+    createdAt:
+      new Date().toISOString(),
+
+    updatedAt:
+      new Date().toISOString(),
+
+    deployedAt: null,
+
+    lastDeploymentAt: null
+  };
+
+  return createProject(project);
 }
 
-// ─────────────────────────────────────────────
-// GET USER PROJECTS
-// ─────────────────────────────────────────────
+/**
+ * List user's projects.
+ */
+export async function listProjects(
+  userId,
+  options = {}
+) {
+  const {
+    includeDeleted = false
+  } = options;
 
-export async function listProjects(userId) {
-  return getUserProjects(userId);
+  const projects =
+    await getUserProjects(
+      String(userId)
+    );
+
+  const filtered = includeDeleted
+    ? projects
+    : projects.filter(
+        (project) =>
+          project.status !== "deleted"
+      );
+
+  return filtered.sort(
+    (a, b) =>
+      new Date(
+        b.updatedAt || b.createdAt
+      ) -
+      new Date(
+        a.updatedAt || a.createdAt
+      )
+  );
 }
 
-// ─────────────────────────────────────────────
-// GET PROJECT
-// ─────────────────────────────────────────────
-
-export async function findProject(projectId, userId = null) {
-  const project = await getProject(projectId);
+/**
+ * Find a project by ID.
+ */
+export async function findProject(
+  projectId,
+  userId = null
+) {
+  const project =
+    await getProject(
+      String(projectId)
+    );
 
   if (!project) {
     return null;
@@ -297,7 +388,8 @@ export async function findProject(projectId, userId = null) {
 
   if (
     userId !== null &&
-    String(project.userId) !== String(userId)
+    String(project.userId) !==
+      String(userId)
   ) {
     return null;
   }
@@ -305,100 +397,273 @@ export async function findProject(projectId, userId = null) {
   return project;
 }
 
-// ─────────────────────────────────────────────
-// UPDATE STATUS
-// ─────────────────────────────────────────────
-
+/**
+ * Change project status.
+ */
 export async function setProjectStatus(
   projectId,
-  status,
-  userId = null
+  status
 ) {
-  const project = await findProject(
-    projectId,
-    userId
-  );
+  if (
+    !PROJECT_LIMITS.statuses.includes(
+      status
+    )
+  ) {
+    throw new Error(
+      `Invalid project status: ${status}`
+    );
+  }
+
+  const project =
+    await getProject(
+      String(projectId)
+    );
 
   if (!project) {
-    return null;
+    throw new Error(
+      "Project not found."
+    );
   }
 
-  const allowedStatuses = [
-    "pending",
-    "deploying",
-    "active",
-    "failed",
-    "suspended",
-    "deleted"
-  ];
+  const updates = {
+    status,
+    updatedAt:
+      new Date().toISOString()
+  };
 
-  if (!allowedStatuses.includes(status)) {
-    throw new Error("Invalid project status.");
+  if (status === "active") {
+    updates.deployedAt =
+      project.deployedAt ||
+      new Date().toISOString();
+
+    updates.lastDeploymentAt =
+      new Date().toISOString();
   }
 
-  return updateProject(projectId, {
-    status
-  });
+  await updateProject(
+    String(projectId),
+    updates
+  );
+
+  return {
+    ...project,
+    ...updates
+  };
 }
 
-// ─────────────────────────────────────────────
-// UPDATE DEPLOYMENT DATA
-// ─────────────────────────────────────────────
-
+/**
+ * Save deployment information.
+ */
 export async function updateDeployment(
   projectId,
-  deploymentData,
-  userId = null
+  deployment = {}
 ) {
-  const project = await findProject(
-    projectId,
-    userId
-  );
+  const project =
+    await getProject(
+      String(projectId)
+    );
 
   if (!project) {
-    return null;
+    throw new Error(
+      "Project not found."
+    );
   }
 
-  return updateProject(projectId, {
-    status: deploymentData.status || project.status,
-    url: deploymentData.url ?? project.url,
-    size: Number(
-      deploymentData.size ?? project.size
-    ),
-    files: Number(
-      deploymentData.files ?? project.files
-    )
-  });
+  const now =
+    new Date().toISOString();
+
+  const updates = {
+    provider:
+      deployment.provider ??
+      project.provider,
+
+    providerProject:
+      deployment.providerProject ??
+      project.providerProject,
+
+    url:
+      deployment.url ??
+      project.url,
+
+    deploymentUrl:
+      deployment.deploymentUrl ??
+      deployment.url ??
+      project.deploymentUrl,
+
+    deploymentId:
+      deployment.deploymentId ??
+      project.deploymentId,
+
+    deploymentStatus:
+      deployment.deploymentStatus ??
+      project.deploymentStatus,
+
+    status:
+      deployment.status ??
+      project.status,
+
+    fileCount:
+      Number.isFinite(
+        Number(deployment.fileCount)
+      )
+        ? Number(deployment.fileCount)
+        : project.fileCount || 0,
+
+    totalSize:
+      Number.isFinite(
+        Number(deployment.totalSize)
+      )
+        ? Number(deployment.totalSize)
+        : project.totalSize || 0,
+
+    deployedAt:
+      deployment.deployedAt ??
+      project.deployedAt,
+
+    lastDeploymentAt:
+      deployment.lastDeploymentAt ??
+      now,
+
+    updatedAt: now
+  };
+
+  await updateProject(
+    String(projectId),
+    updates
+  );
+
+  return {
+    ...project,
+    ...updates
+  };
 }
 
-// ─────────────────────────────────────────────
-// DELETE PROJECT
-// ─────────────────────────────────────────────
-
+/**
+ * Soft-delete a project.
+ */
 export async function removeProject(
   projectId,
   userId = null
 ) {
-  const project = await findProject(
-    projectId,
-    userId
-  );
+  const project =
+    await findProject(
+      projectId,
+      userId
+    );
 
   if (!project) {
-    return false;
+    throw new Error(
+      "Project not found."
+    );
   }
 
-  return deleteProject(projectId);
+  await updateProject(
+    String(projectId),
+    {
+      status: "deleted",
+      updatedAt:
+        new Date().toISOString(),
+      deletedAt:
+        new Date().toISOString()
+    }
+  );
+
+  return {
+    ...project,
+    status: "deleted"
+  };
 }
 
-// ─────────────────────────────────────────────
-// FORMAT BYTES
-// ─────────────────────────────────────────────
+/**
+ * Permanently remove a project
+ * from the database.
+ */
+export async function permanentlyDeleteProject(
+  projectId,
+  userId = null
+) {
+  const project =
+    await findProject(
+      projectId,
+      userId
+    );
 
+  if (!project) {
+    throw new Error(
+      "Project not found."
+    );
+  }
+
+  await deleteProject(
+    String(projectId)
+  );
+
+  return project;
+}
+
+/**
+ * Restore a soft-deleted project.
+ */
+export async function restoreProject(
+  projectId,
+  userId = null
+) {
+  const project =
+    await findProject(
+      projectId,
+      userId
+    );
+
+  if (!project) {
+    throw new Error(
+      "Project not found."
+    );
+  }
+
+  if (
+    project.status !==
+    "deleted"
+  ) {
+    return project;
+  }
+
+  const permission =
+    await canCreateProject(
+      project.userId
+    );
+
+  if (!permission.allowed) {
+    throw new Error(
+      "Project limit reached."
+    );
+  }
+
+  const updates = {
+    status: "pending",
+    deletedAt: null,
+    updatedAt:
+      new Date().toISOString()
+  };
+
+  await updateProject(
+    String(projectId),
+    updates
+  );
+
+  return {
+    ...project,
+    ...updates
+  };
+}
+
+/**
+ * Format bytes.
+ */
 export function formatBytes(bytes) {
-  const value = Number(bytes || 0);
+  const value =
+    Number(bytes) || 0;
 
-  if (value === 0) {
+  if (value <= 0) {
     return "0 B";
   }
 
@@ -406,28 +671,41 @@ export function formatBytes(bytes) {
     "B",
     "KB",
     "MB",
-    "GB"
+    "GB",
+    "TB"
   ];
 
   const index = Math.min(
     Math.floor(
-      Math.log(value) / Math.log(1024)
+      Math.log(value) /
+        Math.log(1024)
     ),
     units.length - 1
   );
 
-  const size =
-    value / Math.pow(1024, index);
-
-  return `${size.toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
+  return `${(
+    value /
+    Math.pow(1024, index)
+  ).toFixed(index === 0 ? 0 : 2)} ${
+    units[index]
+  }`;
 }
 
-// ─────────────────────────────────────────────
-// EXPORT CONFIG
-// ─────────────────────────────────────────────
-
-export const PROJECT_LIMITS = {
-  maxProjects: MAX_PROJECTS_PER_USER,
-  maxSizeMB: config.maxFileSizeMB,
-  allowedExtensions: [...ALLOWED_EXTENSIONS]
+export default {
+  PROJECT_LIMITS,
+  createSlug,
+  sanitizeProjectName,
+  validateProjectName,
+  canCreateProject,
+  isAllowedFile,
+  validateProjectDirectory,
+  registerProject,
+  listProjects,
+  findProject,
+  setProjectStatus,
+  updateDeployment,
+  removeProject,
+  permanentlyDeleteProject,
+  restoreProject,
+  formatBytes
 };
