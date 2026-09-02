@@ -1,12 +1,22 @@
 import TelegramBot from "node-telegram-bot-api";
 
 import config from "./config.js";
+
 import {
   createOrUpdateUser
 } from "./database.js";
 
-import { registerUploadHandler } from "./handlers/upload.js";
-import { registerProjectHandlers } from "./handlers/projects.js";
+import {
+  registerUploadHandler
+} from "./handlers/upload.js";
+
+import {
+  registerProjectHandlers
+} from "./handlers/projects.js";
+
+import {
+  registerAdminHandler
+} from "./handlers/admin.js";
 
 const bot = new TelegramBot(
   config.botToken,
@@ -59,7 +69,10 @@ function mainMenu() {
   };
 }
 
-async function sendWelcome(chatId, user) {
+async function sendWelcome(
+  chatId,
+  user
+) {
   const firstName =
     escapeHtml(
       user?.first_name || "there"
@@ -78,7 +91,7 @@ async function sendWelcome(chatId, user) {
     "• Cloudflare Pages hosting",
     "• Unique live URL",
     "• Project management",
-    "• Fast deployment",
+    "• Free hosting",
     "",
     "📦 Upload your website ZIP and we'll handle the rest."
   ].join("\n");
@@ -93,7 +106,9 @@ async function sendWelcome(chatId, user) {
   );
 }
 
-async function showHostInstructions(chatId) {
+async function showHostInstructions(
+  chatId
+) {
   const text = [
     "🚀 <b>Host Your Website</b>",
     "",
@@ -107,7 +122,7 @@ async function showHostInstructions(chatId) {
     "",
     "☁️ After upload, your website will be automatically deployed.",
     "",
-    "🌐 You'll receive a live <b>.pages.dev</b> URL when deployment finishes.",
+    "🌐 You'll receive a live URL when deployment finishes.",
     "",
     "⬆️ <b>Now send your ZIP file.</b>"
   ].join("\n");
@@ -137,21 +152,34 @@ async function showHostInstructions(chatId) {
   );
 }
 
-async function showProfile(chatId, user) {
+async function showProfile(
+  chatId,
+  user
+) {
+  const fullName =
+    [
+      user.first_name,
+      user.last_name
+    ]
+      .filter(Boolean)
+      .join(" ") ||
+    "Not set";
+
+  const username =
+    user.username
+      ? `@${user.username}`
+      : "Not set";
+
   const text = [
-    "👤 <b>My Profile</b>",
+    "👤 <b>MY PROFILE</b>",
     "",
+    "━━━━━━━━━━━━━━━━━━━━",
+    "",
+    `👤 <b>Name:</b> ${escapeHtml(fullName)}`,
+    `🔗 <b>Username:</b> ${escapeHtml(username)}`,
     `🆔 <b>Telegram ID:</b> <code>${escapeHtml(user.id)}</code>`,
-    `👤 <b>Name:</b> ${escapeHtml(
-      [user.first_name, user.last_name]
-        .filter(Boolean)
-        .join(" ") || "Not set"
-    )}`,
-    `🔗 <b>Username:</b> ${
-      user.username
-        ? `@${escapeHtml(user.username)}`
-        : "Not set"
-    }`
+    "",
+    "━━━━━━━━━━━━━━━━━━━━"
   ].join("\n");
 
   await bot.sendMessage(
@@ -164,19 +192,30 @@ async function showProfile(chatId, user) {
   );
 }
 
-async function showUsage(chatId) {
+async function showUsage(
+  chatId
+) {
+  const text = [
+    "📊 <b>MY USAGE</b>",
+    "",
+    "━━━━━━━━━━━━━━━━━━━━",
+    "",
+    "📁 Maximum Projects",
+    "<b>10 projects</b>",
+    "",
+    `📦 Maximum Upload Size\n<b>${config.maxFileSizeMB} MB</b>`,
+    "",
+    "☁️ Hosting Provider",
+    "<b>Cloudflare Pages</b>",
+    "",
+    "📈 Detailed storage and deployment statistics will be available in future updates.",
+    "",
+    "━━━━━━━━━━━━━━━━━━━━"
+  ].join("\n");
+
   await bot.sendMessage(
     chatId,
-    [
-      "📊 <b>Usage</b>",
-      "",
-      "🚀 Free hosting usage is tracked per project.",
-      "",
-      "📁 Maximum projects: <b>10</b>",
-      `📦 Maximum package size: <b>${config.maxFileSizeMB} MB</b>`,
-      "",
-      "More detailed storage and bandwidth statistics will be added to the dashboard."
-    ].join("\n"),
+    text,
     {
       parse_mode: "HTML",
       ...mainMenu()
@@ -184,26 +223,37 @@ async function showUsage(chatId) {
   );
 }
 
-async function showHelp(chatId) {
+async function showHelp(
+  chatId
+) {
+  const text = [
+    "❓ <b>HELP CENTER</b>",
+    "",
+    "━━━━━━━━━━━━━━━━━━━━",
+    "",
+    "🚀 <b>How to host a website?</b>",
+    "",
+    "1️⃣ Tap <b>Host Website</b>",
+    "2️⃣ Upload your website ZIP",
+    "3️⃣ Bot validates your files",
+    "4️⃣ Website is deployed automatically",
+    "5️⃣ Receive your live URL",
+    "",
+    "📦 <b>ZIP must contain:</b>",
+    "<code>index.html</code>",
+    "",
+    "🌐 <b>Supported:</b>",
+    "HTML • CSS • JavaScript • Images • Fonts • Media",
+    "",
+    "⚠️ <b>Important:</b>",
+    "Only static websites are supported.",
+    "",
+    "━━━━━━━━━━━━━━━━━━━━"
+  ].join("\n");
+
   await bot.sendMessage(
     chatId,
-    [
-      "❓ <b>Help Center</b>",
-      "",
-      "🚀 <b>How to host?</b>",
-      "1. Tap <b>Host Website</b>",
-      "2. Upload your website ZIP",
-      "3. Wait for deployment",
-      "4. Open your live URL",
-      "",
-      "📦 Your ZIP should contain:",
-      "<code>index.html</code>",
-      "",
-      "📁 <b>My Projects</b>",
-      "Manage your hosted websites from Telegram.",
-      "",
-      "⚠️ Only static websites are supported."
-    ].join("\n"),
+    text,
     {
       parse_mode: "HTML",
       ...mainMenu()
@@ -211,33 +261,44 @@ async function showHelp(chatId) {
   );
 }
 
-bot.onText(/^\/start(?:\s+.*)?$/i, async (message) => {
-  try {
-    const user = message.from;
+bot.onText(
+  /^\/start(?:\s+.*)?$/i,
+  async (message) => {
+    try {
+      const user =
+        message.from;
 
-    await createOrUpdateUser({
-      id: String(user.id),
-      username: user.username || "",
-      firstName: user.first_name || "",
-      lastName: user.last_name || ""
-    });
+      await createOrUpdateUser({
+        id: String(user.id),
+        username:
+          user.username || "",
+        firstName:
+          user.first_name || "",
+        lastName:
+          user.last_name || ""
+      });
 
-    await sendWelcome(
-      message.chat.id,
-      user
-    );
-  } catch (error) {
-    console.error(
-      "❌ /start error:",
-      error
-    );
+      await sendWelcome(
+        message.chat.id,
+        user
+      );
+    } catch (error) {
+      console.error(
+        "❌ /start error:",
+        error
+      );
 
-    await bot.sendMessage(
-      message.chat.id,
-      "❌ Something went wrong. Please try again."
-    );
+      try {
+        await bot.sendMessage(
+          message.chat.id,
+          "❌ Something went wrong. Please try again."
+        );
+      } catch {
+        // Ignore Telegram errors.
+      }
+    }
   }
-});
+);
 
 bot.on(
   "callback_query",
@@ -245,10 +306,34 @@ bot.on(
     const chatId =
       query.message?.chat?.id;
 
-    const user = query.from;
-    const data = query.data;
+    const user =
+      query.from;
+
+    const data =
+      query.data || "";
 
     if (!chatId || !data) {
+      return;
+    }
+
+    /*
+     * Admin callbacks are handled
+     * by admin.js.
+     */
+    if (
+      data.startsWith("admin:")
+    ) {
+      return;
+    }
+
+    /*
+     * Project callbacks are handled
+     * by projects.js.
+     */
+    if (
+      data.startsWith("projects:") ||
+      data.startsWith("project:")
+    ) {
       return;
     }
 
@@ -259,9 +344,12 @@ bot.on(
 
       await createOrUpdateUser({
         id: String(user.id),
-        username: user.username || "",
-        firstName: user.first_name || "",
-        lastName: user.last_name || ""
+        username:
+          user.username || "",
+        firstName:
+          user.first_name || "",
+        lastName:
+          user.last_name || ""
       });
 
       switch (data) {
@@ -298,8 +386,6 @@ bot.on(
           break;
 
         default:
-          // Project callbacks are handled
-          // by projects.js.
           break;
       }
     } catch (error) {
@@ -366,8 +452,14 @@ process.on(
   }
 );
 
+/*
+ * Register all bot modules.
+ */
 registerUploadHandler(bot);
+
 registerProjectHandlers(bot);
+
+registerAdminHandler(bot);
 
 async function initializeBot() {
   try {
@@ -391,15 +483,19 @@ async function initializeBot() {
     );
 
     console.log(
-      "☁️ Cloudflare Pages deployment enabled"
+      "☁️ Cloudflare Pages enabled"
     );
 
     console.log(
-      "📦 Upload handler enabled"
+      "📦 Upload system enabled"
     );
 
     console.log(
       "📁 Project manager enabled"
+    );
+
+    console.log(
+      "🛡️ Admin system enabled"
     );
 
     console.log(
