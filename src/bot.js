@@ -43,6 +43,13 @@ polling: true
 
 console.log("🤖 Telegram Hosting Bot started.");
 
+/*
+
+* ============================================================
+* USER REGISTRATION
+* ============================================================
+  */
+
 async function registerTelegramUser(user) {
 if (!user || !user.id) {
 return null;
@@ -57,6 +64,13 @@ languageCode: user.language_code || "",
 isBot: Boolean(user.is_bot)
 });
 }
+
+/*
+
+* ============================================================
+* MAIN MENU
+* ============================================================
+  */
 
 function mainMenuKeyboard() {
 return {
@@ -90,6 +104,13 @@ callback_data: "help"
 ]
 };
 }
+
+/*
+
+* ============================================================
+* /START
+* ============================================================
+  */
 
 bot.on("message", async (message) => {
 try {
@@ -148,6 +169,13 @@ console.error("❌ /start error:", error);
 }
 });
 
+/*
+
+* ============================================================
+* CALLBACK ROUTER
+* ============================================================
+  */
+
 bot.on("callback_query", async (query) => {
 const data = query.data || "";
 const userId = String(query.from?.id || "");
@@ -157,22 +185,37 @@ if (!userId) {
 return;
 }
 
-if (data.startsWith("admin:")) {
-return;
-}
+/*
 
-if (
-data.startsWith("projects:") ||
-data.startsWith("project:")
-) {
-return;
-}
+* Admin callbacks are handled by admin handlers.
+  */
+  if (data.startsWith("admin:")) {
+  return;
+  }
 
-if (!isAdmin(userId)) {
-const access = await checkUserAccess(userId);
+/*
+
+* Project callbacks are handled by projects handler.
+  */
+  if (
+  data.startsWith("projects:") ||
+  data.startsWith("project:")
+  ) {
+  return;
+  }
+
+/*
+
+* Check restricted users.
+  */
+  if (!isAdmin(userId)) {
+  const access = await checkUserAccess(userId);
 
 ```
 if (!access.allowed) {
+```
+
+```
   try {
     await bot.answerCallbackQuery(query.id, {
       text: "🚫 Your account is restricted.",
@@ -245,6 +288,13 @@ try {
 }
 });
 
+/*
+
+* ============================================================
+* MAIN MENU MESSAGE
+* ============================================================
+  */
+
 async function sendMainMenu(chatId) {
 await bot.sendMessage(
 chatId,
@@ -259,6 +309,13 @@ reply_markup: mainMenuKeyboard()
 }
 );
 }
+
+/*
+
+* ============================================================
+* HOST WEBSITE
+* ============================================================
+  */
 
 async function sendHostWebsiteMessage(chatId) {
 await bot.sendMessage(
@@ -304,6 +361,13 @@ callback_data: "main_menu"
 }
 );
 }
+
+/*
+
+* ============================================================
+* PROFILE
+* ============================================================
+  */
 
 async function sendProfile(chatId, userId) {
 const user = await createOrUpdateUser({
@@ -384,6 +448,13 @@ callback_data: "main_menu"
 );
 }
 
+/*
+
+* ============================================================
+* USAGE
+* ============================================================
+  */
+
 async function sendUsage(chatId, userId) {
 const projects = await getUserProjects(userId);
 
@@ -448,6 +519,13 @@ callback_data: "main_menu"
 );
 }
 
+/*
+
+* ============================================================
+* HELP
+* ============================================================
+  */
+
 async function sendHelp(chatId) {
 await bot.sendMessage(
 chatId,
@@ -503,6 +581,13 @@ callback_data: "main_menu"
 );
 }
 
+/*
+
+* ============================================================
+* USER ACCESS GUARD
+* ============================================================
+  */
+
 bot.on("message", async (message) => {
 try {
 if (!message.from?.id) {
@@ -517,10 +602,16 @@ if (
   return;
 }
 
+/*
+ * Upload handler handles documents.
+ */
 if (message.document) {
   return;
 }
 
+/*
+ * Admins bypass user restriction.
+ */
 if (isAdmin(message.from.id)) {
   return;
 }
@@ -545,6 +636,13 @@ error
 }
 });
 
+/*
+
+* ============================================================
+* REGISTER ALL HANDLERS
+* ============================================================
+  */
+
 registerUploadHandler(bot);
 
 registerProjectHandlers(bot);
@@ -556,6 +654,17 @@ registerAdminProjectsHandler(bot);
 registerAdminUsersHandler(bot);
 
 registerBroadcastHandler(bot);
+
+console.log(
+"✅ All bot handlers registered."
+);
+
+/*
+
+* ============================================================
+* TELEGRAM ERRORS
+* ============================================================
+  */
 
 bot.on("polling_error", (error) => {
 console.error(
@@ -570,6 +679,13 @@ console.error(
 error.message
 );
 });
+
+/*
+
+* ============================================================
+* PROCESS ERRORS
+* ============================================================
+  */
 
 process.on(
 "unhandledRejection",
@@ -590,6 +706,13 @@ error
 );
 }
 );
+
+/*
+
+* ============================================================
+* GRACEFUL SHUTDOWN
+* ============================================================
+  */
 
 async function shutdown(signal) {
 console.log(
@@ -627,6 +750,13 @@ process.once(
 () => shutdown("SIGTERM")
 );
 
+/*
+
+* ============================================================
+* HELPERS
+* ============================================================
+  */
+
 function escapeHtml(value) {
 return String(value ?? "")
 .replace(/&/g, "&")
@@ -656,7 +786,3 @@ day: "numeric"
 }
 );
 }
-
-console.log(
-"✅ All bot handlers registered."
-);
