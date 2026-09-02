@@ -1,7 +1,7 @@
 {
   "name": "telegram-free-hosting-bot",
   "version": "1.0.0",
-  "description": "Free Telegram hosting bot",
+  "description": "Professional Telegram free website hosting bot",
   "type": "module",
   "main": "src/bot.js",
   "scripts": {
@@ -10,6 +10,10 @@
   },
   "dependencies": {
     "dotenv": "^16.4.7",
-    "node-telegram-bot-api": "^0.66.0"
+    "node-telegram-bot-api": "^0.66.0",
+    "wrangler": "^4.35.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
