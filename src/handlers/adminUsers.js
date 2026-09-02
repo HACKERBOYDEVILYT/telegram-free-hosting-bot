@@ -1,6 +1,8 @@
 import {
   getUsers,
-  getProjects
+  getProjects,
+  blockUser,
+  unblockUser
 } from "../database.js";
 
 import {
@@ -17,9 +19,7 @@ function escapeHtml(value) {
 }
 
 function formatDate(value) {
-  if (!value) {
-    return "Not available";
-  }
+  if (!value) return "Not available";
 
   const date = new Date(value);
 
@@ -64,52 +64,30 @@ function getUserProjects(
   );
 }
 
-function usersKeyboard() {
-  return {
-    inline_keyboard: [
-      [
-        {
-          text: "🔄 Refresh",
-          callback_data:
-            "admin:users"
-        }
-      ],
-      [
-        {
-          text: "🟢 Active Users",
-          callback_data:
-            "admin:users:active"
-        },
-        {
-          text: "📁 Top Users",
-          callback_data:
-            "admin:users:top"
-        }
-      ],
-      [
-        {
-          text: "🔙 Dashboard",
-          callback_data:
-            "admin:dashboard"
-        }
-      ]
-    ]
-  };
+function truncate(
+  value,
+  maxLength
+) {
+  const text = String(value || "");
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return (
+    text.slice(0, maxLength - 1) +
+    "…"
+  );
 }
 
-export function registerAdminUsersHandler(
-  bot
-) {
+export function registerAdminUsersHandler(bot) {
   bot.on(
     "callback_query",
     async (query) => {
-      const data =
-        query.data || "";
+      const data = query.data || "";
 
       if (
-        !data.startsWith(
-          "admin:user:"
-        )
+        !data.startsWith("admin:user:")
       ) {
         return;
       }
@@ -117,14 +95,12 @@ export function registerAdminUsersHandler(
       const chatId =
         query.message?.chat?.id;
 
-      const userId =
+      if (!chatId) return;
+
+      const adminId =
         String(query.from.id);
 
-      if (!chatId) {
-        return;
-      }
-
-      if (!isAdmin(userId)) {
+      if (!isAdmin(adminId)) {
         try {
           await bot.answerCallbackQuery(
             query.id,
@@ -134,9 +110,7 @@ export function registerAdminUsersHandler(
               show_alert: true
             }
           );
-        } catch {
-          // Ignore Telegram errors.
-        }
+        } catch {}
 
         return;
       }
@@ -147,38 +121,29 @@ export function registerAdminUsersHandler(
         );
 
         if (
-          data ===
-          "admin:user:list"
+          data === "admin:user:list"
         ) {
-          await showUsers(
-            bot,
-            chatId
-          );
-
+          await showUsers(bot, chatId);
           return;
         }
 
         if (
-          data ===
-          "admin:user:active"
+          data === "admin:user:active"
         ) {
           await showActiveUsers(
             bot,
             chatId
           );
-
           return;
         }
 
         if (
-          data ===
-          "admin:user:top"
+          data === "admin:user:top"
         ) {
           await showTopUsers(
             bot,
             chatId
           );
-
           return;
         }
 
@@ -198,10 +163,90 @@ export function registerAdminUsersHandler(
             chatId,
             targetUserId
           );
+
+          return;
+        }
+
+        if (
+          data.startsWith(
+            "admin:user:block:"
+          )
+        ) {
+          const targetUserId =
+            data.replace(
+              "admin:user:block:",
+              ""
+            );
+
+          await showBlockConfirmation(
+            bot,
+            chatId,
+            targetUserId
+          );
+
+          return;
+        }
+
+        if (
+          data.startsWith(
+            "admin:user:block-confirm:"
+          )
+        ) {
+          const targetUserId =
+            data.replace(
+              "admin:user:block-confirm:",
+              ""
+            );
+
+          await confirmBlockUser(
+            bot,
+            chatId,
+            targetUserId
+          );
+
+          return;
+        }
+
+        if (
+          data.startsWith(
+            "admin:user:unblock:"
+          )
+        ) {
+          const targetUserId =
+            data.replace(
+              "admin:user:unblock:",
+              ""
+            );
+
+          await showUnblockConfirmation(
+            bot,
+            chatId,
+            targetUserId
+          );
+
+          return;
+        }
+
+        if (
+          data.startsWith(
+            "admin:user:unblock-confirm:"
+          )
+        ) {
+          const targetUserId =
+            data.replace(
+              "admin:user:unblock-confirm:",
+              ""
+            );
+
+          await confirmUnblockUser(
+            bot,
+            chatId,
+            targetUserId
+          );
         }
       } catch (error) {
         console.error(
-          "❌ Admin users error:",
+          "❌ Admin user error:",
           error
         );
 
@@ -210,9 +255,7 @@ export function registerAdminUsersHandler(
             chatId,
             "❌ Unable to process user management request."
           );
-        } catch {
-          // Ignore Telegram errors.
-        }
+        } catch {}
       }
     }
   );
@@ -221,6 +264,10 @@ export function registerAdminUsersHandler(
     "👥 Admin user manager registered."
   );
 }
+
+/* =========================
+   USER LIST
+========================= */
 
 async function showUsers(
   bot,
@@ -249,10 +296,19 @@ async function showUsers(
         )
     );
 
+  const blockedCount =
+    users.filter(
+      (user) =>
+        user.isBlocked === true ||
+        user.status === "blocked"
+    ).length;
+
   const lines = [
     "👥 <b>USER MANAGEMENT</b>",
     "",
     `👤 Total Users: <b>${users.length}</b>`,
+    `🟢 Active Users: <b>${users.length - blockedCount}</b>`,
+    `🚫 Blocked Users: <b>${blockedCount}</b>`,
     `📁 Total Projects: <b>${projects.length}</b>`,
     "",
     "━━━━━━━━━━━━━━━━━━━━"
@@ -263,47 +319,6 @@ async function showUsers(
       "",
       "📭 <b>No users registered yet.</b>"
     );
-  } else {
-    sortedUsers
-      .slice(0, 20)
-      .forEach(
-        (user, index) => {
-          const userProjects =
-            getUserProjects(
-              projects,
-              user.id
-            );
-
-          const activeProjects =
-            userProjects.filter(
-              (project) =>
-                project.status ===
-                "active"
-            ).length;
-
-          lines.push(
-            "",
-            `${index + 1}. <b>${escapeHtml(
-              getUserName(user)
-            )}</b>`,
-            `   🔗 ${escapeHtml(
-              getUsername(user)
-            )}`,
-            `   🆔 <code>${escapeHtml(
-              user.id
-            )}</code>`,
-            `   📁 Projects: <b>${userProjects.length}</b>`,
-            `   🟢 Active: <b>${activeProjects}</b>`
-          );
-        }
-      );
-
-    if (sortedUsers.length > 20) {
-      lines.push(
-        "",
-        `ℹ️ Showing latest <b>20</b> of <b>${sortedUsers.length}</b> users.`
-      );
-    }
   }
 
   const keyboard = [];
@@ -311,12 +326,16 @@ async function showUsers(
   sortedUsers
     .slice(0, 20)
     .forEach((user) => {
+      const blocked =
+        user.isBlocked === true ||
+        user.status === "blocked";
+
       keyboard.push([
         {
           text:
-            `👤 ${truncate(
+            `${blocked ? "🚫" : "👤"} ${truncate(
               getUserName(user),
-              26
+              28
             )}`,
           callback_data:
             `admin:user:view:${user.id}`
@@ -325,7 +344,32 @@ async function showUsers(
     });
 
   keyboard.push(
-    ...usersKeyboard().inline_keyboard
+    [
+      {
+        text: "🔄 Refresh",
+        callback_data:
+          "admin:users"
+      }
+    ],
+    [
+      {
+        text: "🟢 Active Users",
+        callback_data:
+          "admin:user:active"
+      },
+      {
+        text: "🏆 Top Users",
+        callback_data:
+          "admin:user:top"
+      }
+    ],
+    [
+      {
+        text: "🔙 Dashboard",
+        callback_data:
+          "admin:dashboard"
+      }
+    ]
   );
 
   await bot.sendMessage(
@@ -343,6 +387,10 @@ async function showUsers(
   );
 }
 
+/* =========================
+   ACTIVE USERS
+========================= */
+
 async function showActiveUsers(
   bot,
   chatId
@@ -356,45 +404,33 @@ async function showActiveUsers(
   ]);
 
   const activeUsers =
-    users.filter((user) => {
-      const userProjects =
-        getUserProjects(
-          projects,
-          user.id
-        );
-
-      return userProjects.some(
-        (project) =>
-          project.status ===
-          "active"
-      );
-    });
+    users.filter(
+      (user) =>
+        user.isBlocked !== true &&
+        user.status !== "blocked"
+    );
 
   const lines = [
     "🟢 <b>ACTIVE USERS</b>",
     "",
-    `👥 Users with active websites: <b>${activeUsers.length}</b>`,
+    `👥 Active Users: <b>${activeUsers.length}</b>`,
     "",
     "━━━━━━━━━━━━━━━━━━━━"
   ];
-
-  if (!activeUsers.length) {
-    lines.push(
-      "",
-      "📭 No users currently have an active website."
-    );
-  }
 
   const keyboard = [];
 
   activeUsers
     .slice(0, 20)
     .forEach((user, index) => {
-      const count =
+      const userProjects =
         getUserProjects(
           projects,
           user.id
-        ).filter(
+        );
+
+      const activeProjects =
+        userProjects.filter(
           (project) =>
             project.status ===
             "active"
@@ -408,7 +444,8 @@ async function showActiveUsers(
         `   🔗 ${escapeHtml(
           getUsername(user)
         )}`,
-        `   🟢 Active websites: <b>${count}</b>`
+        `   📁 Projects: <b>${userProjects.length}</b>`,
+        `   🟢 Active: <b>${activeProjects}</b>`
       );
 
       keyboard.push([
@@ -427,16 +464,16 @@ async function showActiveUsers(
   keyboard.push(
     [
       {
-        text: "🔙 Dashboard",
+        text: "👥 All Users",
         callback_data:
-          "admin:dashboard"
+          "admin:user:list"
       }
     ],
     [
       {
-        text: "👥 All Users",
+        text: "🔙 Dashboard",
         callback_data:
-          "admin:user:list"
+          "admin:dashboard"
       }
     ]
   );
@@ -453,6 +490,10 @@ async function showActiveUsers(
     }
   );
 }
+
+/* =========================
+   TOP USERS
+========================= */
 
 async function showTopUsers(
   bot,
@@ -489,6 +530,12 @@ async function showTopUsers(
           active
         };
       })
+      .filter(
+        (item) =>
+          !item.user.isBlocked &&
+          item.user.status !==
+            "blocked"
+      )
       .sort(
         (a, b) =>
           b.active - a.active ||
@@ -582,6 +629,10 @@ async function showTopUsers(
   );
 }
 
+/* =========================
+   USER DETAILS
+========================= */
+
 async function showUserDetails(
   bot,
   chatId,
@@ -660,6 +711,14 @@ async function showUserDetails(
         "deleted"
     ).length;
 
+  const blocked =
+    user.isBlocked === true ||
+    user.status === "blocked";
+
+  const statusText = blocked
+    ? "🚫 BLOCKED"
+    : "🟢 ACTIVE";
+
   const text = [
     "👤 <b>USER DETAILS</b>",
     "",
@@ -674,6 +733,7 @@ async function showUserDetails(
     `🆔 <b>Telegram ID:</b> <code>${escapeHtml(
       user.id
     )}</code>`,
+    `📌 <b>Status:</b> ${statusText}`,
     "",
     "📁 <b>HOSTING ACTIVITY</b>",
     "",
@@ -689,9 +749,22 @@ async function showUserDetails(
     `🔄 <b>Last Activity:</b> ${formatDate(
       user.updatedAt
     )}`,
+    blocked
+      ? `🚫 <b>Blocked:</b> ${formatDate(
+          user.blockedAt
+        )}`
+      : "",
+    blocked &&
+    user.blockedReason
+      ? `📝 <b>Reason:</b> ${escapeHtml(
+          user.blockedReason
+        )}`
+      : "",
     "",
     "━━━━━━━━━━━━━━━━━━━━"
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const keyboard = [
     [
@@ -700,7 +773,28 @@ async function showUserDetails(
         callback_data:
           `admin:user:projects:${user.id}`
       }
-    ],
+    ]
+  ];
+
+  if (blocked) {
+    keyboard.push([
+      {
+        text: "✅ Unblock User",
+        callback_data:
+          `admin:user:unblock:${user.id}`
+      }
+    ]);
+  } else {
+    keyboard.push([
+      {
+        text: "🚫 Block User",
+        callback_data:
+          `admin:user:block:${user.id}`
+      }
+    ]);
+  }
+
+  keyboard.push(
     [
       {
         text: "🔙 Users",
@@ -713,7 +807,7 @@ async function showUserDetails(
           "admin:dashboard"
       }
     ]
-  ];
+  );
 
   await bot.sendMessage(
     chatId,
@@ -728,24 +822,298 @@ async function showUserDetails(
   );
 }
 
-function truncate(
-  value,
-  maxLength
-) {
-  const text =
-    String(value || "");
+/* =========================
+   BLOCK CONFIRMATION
+========================= */
 
-  if (
-    text.length <= maxLength
-  ) {
-    return text;
+async function showBlockConfirmation(
+  bot,
+  chatId,
+  targetUserId
+) {
+  const user =
+    await findUser(targetUserId);
+
+  if (!user) {
+    await bot.sendMessage(
+      chatId,
+      "❌ User not found."
+    );
+
+    return;
   }
 
+  const text = [
+    "🚫 <b>BLOCK USER</b>",
+    "",
+    `👤 User: <b>${escapeHtml(
+      getUserName(user)
+    )}</b>`,
+    `🆔 ID: <code>${escapeHtml(
+      user.id
+    )}</code>`,
+    "",
+    "Blocking this user will prevent them from using hosting features.",
+    "",
+    "⚠️ Are you sure?"
+  ].join("\n");
+
+  await bot.sendMessage(
+    chatId,
+    text,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text:
+                "🚫 Yes, Block User",
+              callback_data:
+                `admin:user:block-confirm:${user.id}`
+            }
+          ],
+          [
+            {
+              text:
+                "❌ Cancel",
+              callback_data:
+                `admin:user:view:${user.id}`
+            }
+          ]
+        ]
+      }
+    }
+  );
+}
+
+async function confirmBlockUser(
+  bot,
+  chatId,
+  targetUserId
+) {
+  const user =
+    await findUser(targetUserId);
+
+  if (!user) {
+    await bot.sendMessage(
+      chatId,
+      "❌ User not found."
+    );
+
+    return;
+  }
+
+  /*
+   * Default reason for now.
+   * A future version can ask the
+   * admin for a custom reason.
+   */
+  const updated =
+    await blockUser(
+      targetUserId,
+      "Blocked by administrator"
+    );
+
+  if (!updated) {
+    await bot.sendMessage(
+      chatId,
+      "❌ Failed to block user."
+    );
+
+    return;
+  }
+
+  await bot.sendMessage(
+    chatId,
+    [
+      "🚫 <b>USER BLOCKED</b>",
+      "",
+      `👤 ${escapeHtml(
+        getUserName(updated)
+      )}`,
+      `🆔 <code>${escapeHtml(
+        updated.id
+      )}</code>`,
+      "",
+      "The user is now restricted from hosting."
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text:
+                "👤 View User",
+              callback_data:
+                `admin:user:view:${updated.id}`
+            }
+          ],
+          [
+            {
+              text:
+                "👥 Users",
+              callback_data:
+                "admin:user:list"
+            }
+          ]
+        ]
+      }
+    }
+  );
+}
+
+/* =========================
+   UNBLOCK CONFIRMATION
+========================= */
+
+async function showUnblockConfirmation(
+  bot,
+  chatId,
+  targetUserId
+) {
+  const user =
+    await findUser(targetUserId);
+
+  if (!user) {
+    await bot.sendMessage(
+      chatId,
+      "❌ User not found."
+    );
+
+    return;
+  }
+
+  const text = [
+    "✅ <b>UNBLOCK USER</b>",
+    "",
+    `👤 User: <b>${escapeHtml(
+      getUserName(user)
+    )}</b>`,
+    `🆔 ID: <code>${escapeHtml(
+      user.id
+    )}</code>`,
+    "",
+    "This user will regain access to hosting features.",
+    "",
+    "Are you sure?"
+  ].join("\n");
+
+  await bot.sendMessage(
+    chatId,
+    text,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text:
+                "✅ Yes, Unblock",
+              callback_data:
+                `admin:user:unblock-confirm:${user.id}`
+            }
+          ],
+          [
+            {
+              text:
+                "❌ Cancel",
+              callback_data:
+                `admin:user:view:${user.id}`
+            }
+          ]
+        ]
+      }
+    }
+  );
+}
+
+async function confirmUnblockUser(
+  bot,
+  chatId,
+  targetUserId
+) {
+  const user =
+    await findUser(targetUserId);
+
+  if (!user) {
+    await bot.sendMessage(
+      chatId,
+      "❌ User not found."
+    );
+
+    return;
+  }
+
+  const updated =
+    await unblockUser(
+      targetUserId
+    );
+
+  if (!updated) {
+    await bot.sendMessage(
+      chatId,
+      "❌ Failed to unblock user."
+    );
+
+    return;
+  }
+
+  await bot.sendMessage(
+    chatId,
+    [
+      "✅ <b>USER UNBLOCKED</b>",
+      "",
+      `👤 ${escapeHtml(
+        getUserName(updated)
+      )}`,
+      `🆔 <code>${escapeHtml(
+        updated.id
+      )}</code>`,
+      "",
+      "The user can now use hosting features again."
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text:
+                "👤 View User",
+              callback_data:
+                `admin:user:view:${updated.id}`
+            }
+          ],
+          [
+            {
+              text:
+                "👥 Users",
+              callback_data:
+                "admin:user:list"
+            }
+          ]
+        ]
+      }
+    }
+  );
+}
+
+/* =========================
+   HELPERS
+========================= */
+
+async function findUser(userId) {
+  const users =
+    await getUsers();
+
   return (
-    text.slice(
-      0,
-      maxLength - 1
-    ) + "…"
+    users.find(
+      (user) =>
+        String(user.id) ===
+        String(userId)
+    ) || null
   );
 }
 
