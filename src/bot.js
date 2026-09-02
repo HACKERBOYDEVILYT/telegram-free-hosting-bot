@@ -18,6 +18,10 @@ import {
   registerAdminHandler
 } from "./handlers/admin.js";
 
+import {
+  registerAdminProjectsHandler
+} from "./handlers/adminProjects.js";
+
 const bot = new TelegramBot(
   config.botToken,
   {
@@ -456,10 +460,9 @@ process.on(
  * Register all bot modules.
  */
 registerUploadHandler(bot);
-
 registerProjectHandlers(bot);
-
 registerAdminHandler(bot);
+registerAdminProjectsHandler(bot);
 
 async function initializeBot() {
   try {
