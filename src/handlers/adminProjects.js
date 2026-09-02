@@ -1,4 +1,3 @@
-```js
 import {
   getProjects,
   getUsers,
@@ -1447,4 +1446,3 @@ async function safeAnswer(
     // Callback may already have been answered.
   }
 }
-```
