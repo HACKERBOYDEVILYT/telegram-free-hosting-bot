@@ -1,8 +1,8 @@
 import config from "../config.js";
+
 import {
   getStatistics,
-  getUsers,
-  getProjects
+  getUsers
 } from "../database.js";
 
 import {
@@ -24,48 +24,57 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-function adminKeyboard() {
+function dashboardKeyboard() {
   return {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          {
-            text: "📊 Statistics",
-            callback_data: "admin:stats"
-          },
-          {
-            text: "👥 Users",
-            callback_data: "admin:users"
-          }
-        ],
-        [
-          {
-            text: "🌐 Projects",
-            callback_data: "admin:projects"
-          },
-          {
-            text: "☁️ Cloudflare",
-            callback_data: "admin:cloudflare"
-          }
-        ],
-        [
-          {
-            text: "🔄 Refresh",
-            callback_data: "admin:dashboard"
-          }
-        ],
-        [
-          {
-            text: "🔙 Main Menu",
-            callback_data: "main_menu"
-          }
-        ]
+    inline_keyboard: [
+      [
+        {
+          text: "📊 Statistics",
+          callback_data:
+            "admin:stats"
+        },
+        {
+          text: "👥 Users",
+          callback_data:
+            "admin:users"
+        }
+      ],
+      [
+        {
+          text: "🌐 Projects",
+          callback_data:
+            "admin:projects"
+        },
+        {
+          text: "☁️ Cloudflare",
+          callback_data:
+            "admin:cloudflare"
+        }
+      ],
+      [
+        {
+          text: "🔄 Refresh",
+          callback_data:
+            "admin:dashboard"
+        }
+      ],
+      [
+        {
+          text: "🔙 Main Menu",
+          callback_data:
+            "main_menu"
+        }
       ]
-    }
+    ]
   };
 }
 
-export function registerAdminHandler(bot) {
+export function registerAdminHandler(
+  bot
+) {
+  /*
+   * /admin command
+   */
   bot.onText(
     /^\/admin$/i,
     async (message) => {
@@ -76,7 +85,11 @@ export function registerAdminHandler(bot) {
         if (!isAdmin(userId)) {
           await bot.sendMessage(
             message.chat.id,
-            "⛔ <b>Access Denied</b>\n\nYou are not authorized to access the admin panel.",
+            [
+              "⛔ <b>ACCESS DENIED</b>",
+              "",
+              "You are not authorized to access the admin panel."
+            ].join("\n"),
             {
               parse_mode: "HTML"
             }
@@ -95,20 +108,41 @@ export function registerAdminHandler(bot) {
           error
         );
 
-        await bot.sendMessage(
-          message.chat.id,
-          "❌ Unable to open admin panel."
-        );
+        try {
+          await bot.sendMessage(
+            message.chat.id,
+            "❌ Unable to open admin panel."
+          );
+        } catch {
+          // Ignore Telegram errors.
+        }
       }
     }
   );
 
+  /*
+   * Only handle the core admin
+   * callbacks here.
+   *
+   * Project-specific callbacks are
+   * handled by adminProjects.js.
+   */
   bot.on(
     "callback_query",
     async (query) => {
-      const data = query.data || "";
+      const data =
+        query.data || "";
 
-      if (!data.startsWith("admin:")) {
+      const coreCallbacks = [
+        "admin:dashboard",
+        "admin:stats",
+        "admin:users",
+        "admin:cloudflare"
+      ];
+
+      if (
+        !coreCallbacks.includes(data)
+      ) {
         return;
       }
 
@@ -127,7 +161,8 @@ export function registerAdminHandler(bot) {
           await bot.answerCallbackQuery(
             query.id,
             {
-              text: "⛔ Admin access required.",
+              text:
+                "⛔ Admin access required.",
               show_alert: true
             }
           );
@@ -165,13 +200,6 @@ export function registerAdminHandler(bot) {
             );
             break;
 
-          case "admin:projects":
-            await sendProjects(
-              bot,
-              chatId
-            );
-            break;
-
           case "admin:cloudflare":
             await sendCloudflareStatus(
               bot,
@@ -201,7 +229,7 @@ export function registerAdminHandler(bot) {
   );
 
   console.log(
-    "🛡️ Admin handler registered."
+    "🛡️ Admin core handler registered."
   );
 }
 
@@ -212,10 +240,12 @@ async function sendAdminDashboard(
   const statistics =
     await getStatistics();
 
-  const users =
-    Number(statistics?.totalUsers || 0);
+  const totalUsers =
+    Number(
+      statistics?.totalUsers || 0
+    );
 
-  const projects =
+  const totalProjects =
     Number(
       statistics?.totalProjects || 0
     );
@@ -223,6 +253,11 @@ async function sendAdminDashboard(
   const activeProjects =
     Number(
       statistics?.activeProjects || 0
+    );
+
+  const deployingProjects =
+    Number(
+      statistics?.deployingProjects || 0
     );
 
   const failedProjects =
@@ -235,19 +270,22 @@ async function sendAdminDashboard(
     "",
     "━━━━━━━━━━━━━━━━━━━━",
     "",
-    "📊 <b>Overview</b>",
+    "📊 <b>PLATFORM OVERVIEW</b>",
     "",
-    `👥 Total Users: <b>${users}</b>`,
-    `📁 Total Projects: <b>${projects}</b>`,
-    `🟢 Active Projects: <b>${activeProjects}</b>`,
-    `🔴 Failed Projects: <b>${failedProjects}</b>`,
+    `👥 Users: <b>${totalUsers}</b>`,
+    `📁 Projects: <b>${totalProjects}</b>`,
+    `🟢 Active: <b>${activeProjects}</b>`,
+    `🚀 Deploying: <b>${deployingProjects}</b>`,
+    `🔴 Failed: <b>${failedProjects}</b>`,
     "",
     "☁️ Hosting: <b>Cloudflare Pages</b>",
-    "🤖 Bot Status: <b>Online</b>",
+    "🤖 Bot: <b>Online</b>",
     "",
     "━━━━━━━━━━━━━━━━━━━━",
     "",
-    "Select an option below:"
+    "🔐 <b>Administrator Mode</b>",
+    "",
+    "Manage users, hosted projects, statistics and hosting infrastructure from this panel."
   ].join("\n");
 
   await bot.sendMessage(
@@ -255,7 +293,7 @@ async function sendAdminDashboard(
     text,
     {
       parse_mode: "HTML",
-      ...adminKeyboard()
+      ...dashboardKeyboard()
     }
   );
 }
@@ -267,10 +305,12 @@ async function sendStatistics(
   const statistics =
     await getStatistics();
 
-  const users =
-    Number(statistics?.totalUsers || 0);
+  const totalUsers =
+    Number(
+      statistics?.totalUsers || 0
+    );
 
-  const projects =
+  const totalProjects =
     Number(
       statistics?.totalProjects || 0
     );
@@ -285,14 +325,19 @@ async function sendStatistics(
       statistics?.deployingProjects || 0
     );
 
+  const pending =
+    Number(
+      statistics?.pendingProjects || 0
+    );
+
   const failed =
     Number(
       statistics?.failedProjects || 0
     );
 
-  const pending =
+  const suspended =
     Number(
-      statistics?.pendingProjects || 0
+      statistics?.suspendedProjects || 0
     );
 
   const deleted =
@@ -301,19 +346,22 @@ async function sendStatistics(
     );
 
   const text = [
-    "📊 <b>BOT STATISTICS</b>",
+    "📊 <b>PLATFORM STATISTICS</b>",
     "",
     "━━━━━━━━━━━━━━━━━━━━",
     "",
-    "👥 <b>Users</b>",
-    `Total Users: <b>${users}</b>`,
+    "👥 <b>USERS</b>",
     "",
-    "📁 <b>Projects</b>",
-    `Total: <b>${projects}</b>`,
+    `Total Users: <b>${totalUsers}</b>`,
+    "",
+    "📁 <b>PROJECTS</b>",
+    "",
+    `Total: <b>${totalProjects}</b>`,
     `🟢 Active: <b>${active}</b>`,
     `🚀 Deploying: <b>${deploying}</b>`,
     `⏳ Pending: <b>${pending}</b>`,
     `🔴 Failed: <b>${failed}</b>`,
+    `🟠 Suspended: <b>${suspended}</b>`,
     `🗑️ Deleted: <b>${deleted}</b>`,
     "",
     "━━━━━━━━━━━━━━━━━━━━"
@@ -329,13 +377,15 @@ async function sendStatistics(
           [
             {
               text: "🔄 Refresh",
-              callback_data: "admin:stats"
+              callback_data:
+                "admin:stats"
             }
           ],
           [
             {
               text: "🔙 Dashboard",
-              callback_data: "admin:dashboard"
+              callback_data:
+                "admin:dashboard"
             }
           ]
         ]
@@ -366,62 +416,54 @@ async function sendUsers(
               0
           )
       )
-      .slice(0, 15);
-
-  if (!sortedUsers.length) {
-    await bot.sendMessage(
-      chatId,
-      "👥 <b>Users</b>\n\nNo users registered yet.",
-      {
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🔙 Dashboard",
-                callback_data: "admin:dashboard"
-              }
-            ]
-          ]
-        }
-      }
-    );
-
-    return;
-  }
+      .slice(0, 20);
 
   const lines = [
-    "👥 <b>RECENT USERS</b>",
+    "👥 <b>USER MANAGEMENT</b>",
     "",
-    `Total registered: <b>${users.length}</b>`,
+    `👤 Registered Users: <b>${users.length}</b>`,
     "",
     "━━━━━━━━━━━━━━━━━━━━"
   ];
 
-  sortedUsers.forEach(
-    (user, index) => {
-      const name =
-        [
-          user.firstName,
-          user.lastName
-        ]
-          .filter(Boolean)
-          .join(" ") ||
-        "Unknown";
+  if (!sortedUsers.length) {
+    lines.push(
+      "",
+      "📭 No registered users yet."
+    );
+  } else {
+    sortedUsers.forEach(
+      (user, index) => {
+        const name =
+          [
+            user.firstName,
+            user.lastName
+          ]
+            .filter(Boolean)
+            .join(" ") ||
+          "Unknown User";
 
-      const username =
-        user.username
-          ? `@${user.username}`
-          : "No username";
+        const username =
+          user.username
+            ? `@${user.username}`
+            : "No username";
 
-      lines.push(
-        `${index + 1}. <b>${escapeHtml(name)}</b>`,
-        `   👤 ${escapeHtml(username)}`,
-        `   🆔 <code>${escapeHtml(user.id)}</code>`,
-        ""
-      );
-    }
-  );
+        lines.push(
+          "",
+          `${index + 1}. <b>${escapeHtml(name)}</b>`,
+          `   🔗 ${escapeHtml(username)}`,
+          `   🆔 <code>${escapeHtml(user.id)}</code>`
+        );
+      }
+    );
+  }
+
+  if (users.length > 20) {
+    lines.push(
+      "",
+      `ℹ️ Showing latest <b>20</b> users.`
+    );
+  }
 
   await bot.sendMessage(
     chatId,
@@ -433,76 +475,15 @@ async function sendUsers(
           [
             {
               text: "🔄 Refresh",
-              callback_data: "admin:users"
+              callback_data:
+                "admin:users"
             }
           ],
           [
             {
               text: "🔙 Dashboard",
-              callback_data: "admin:dashboard"
-            }
-          ]
-        ]
-      }
-    }
-  );
-}
-
-async function sendProjects(
-  bot,
-  chatId
-) {
-  const projects =
-    await getProjects();
-
-  const active =
-    projects.filter(
-      (project) =>
-        project.status === "active"
-    ).length;
-
-  const deploying =
-    projects.filter(
-      (project) =>
-        project.status === "deploying"
-    ).length;
-
-  const failed =
-    projects.filter(
-      (project) =>
-        project.status === "failed"
-    ).length;
-
-  const text = [
-    "🌐 <b>HOSTING PROJECTS</b>",
-    "",
-    `📁 Total: <b>${projects.length}</b>`,
-    `🟢 Active: <b>${active}</b>`,
-    `🚀 Deploying: <b>${deploying}</b>`,
-    `🔴 Failed: <b>${failed}</b>`,
-    "",
-    "━━━━━━━━━━━━━━━━━━━━",
-    "",
-    "Project management controls will be expanded here."
-  ].join("\n");
-
-  await bot.sendMessage(
-    chatId,
-    text,
-    {
-      parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: "🔄 Refresh",
-              callback_data: "admin:projects"
-            }
-          ],
-          [
-            {
-              text: "🔙 Dashboard",
-              callback_data: "admin:dashboard"
+              callback_data:
+                "admin:dashboard"
             }
           ]
         ]
@@ -515,10 +496,16 @@ async function sendCloudflareStatus(
   bot,
   chatId
 ) {
-  const message =
+  const loading =
     await bot.sendMessage(
       chatId,
-      "☁️ <b>Cloudflare</b>\n\n⏳ Checking connection...",
+      [
+        "☁️ <b>CLOUDFLARE</b>",
+        "",
+        "⏳ Testing connection...",
+        "",
+        "Please wait."
+      ].join("\n"),
       {
         parse_mode: "HTML"
       }
@@ -529,8 +516,8 @@ async function sendCloudflareStatus(
 
   const status =
     result.success
-      ? "🟢 <b>Connected</b>"
-      : "🔴 <b>Connection Failed</b>";
+      ? "🟢 <b>CONNECTED</b>"
+      : "🔴 <b>CONNECTION FAILED</b>";
 
   const text = [
     "☁️ <b>CLOUDFLARE STATUS</b>",
@@ -542,8 +529,29 @@ async function sendCloudflareStatus(
     escapeHtml(
       result.message ||
         "No additional information."
-    )
+    ),
+    "",
+    "━━━━━━━━━━━━━━━━━━━━"
   ].join("\n");
+
+  const keyboard = {
+    inline_keyboard: [
+      [
+        {
+          text: "🔄 Test Again",
+          callback_data:
+            "admin:cloudflare"
+        }
+      ],
+      [
+        {
+          text: "🔙 Dashboard",
+          callback_data:
+            "admin:dashboard"
+        }
+      ]
+    ]
+  };
 
   try {
     await bot.editMessageText(
@@ -551,36 +559,26 @@ async function sendCloudflareStatus(
       {
         chat_id: chatId,
         message_id:
-          message.message_id,
+          loading.message_id,
         parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🔄 Test Again",
-                callback_data:
-                  "admin:cloudflare"
-              }
-            ],
-            [
-              {
-                text: "🔙 Dashboard",
-                callback_data:
-                  "admin:dashboard"
-              }
-            ]
-          ]
-        }
+        reply_markup:
+          keyboard
       }
     );
   } catch {
-    await bot.sendMessage(
-      chatId,
-      text,
-      {
-        parse_mode: "HTML"
-      }
-    );
+    try {
+      await bot.sendMessage(
+        chatId,
+        text,
+        {
+          parse_mode: "HTML",
+          reply_markup:
+            keyboard
+        }
+      );
+    } catch {
+      // Ignore Telegram errors.
+    }
   }
 }
 
