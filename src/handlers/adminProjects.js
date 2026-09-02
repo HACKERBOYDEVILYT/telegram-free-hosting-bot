@@ -1,3 +1,4 @@
+```js
 import {
   getProjects,
   getUsers,
@@ -13,114 +14,15 @@ import {
   deleteCloudflareProject
 } from "../services/deployer.js";
 
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
+import {
+  removeProjectStorage
+} from "../services/fileManager.js";
 
-function statusInfo(status) {
-  switch (status) {
-    case "active":
-      return {
-        emoji: "🟢",
-        label: "ACTIVE"
-      };
-
-    case "deploying":
-      return {
-        emoji: "🚀",
-        label: "DEPLOYING"
-      };
-
-    case "pending":
-      return {
-        emoji: "⏳",
-        label: "PENDING"
-      };
-
-    case "failed":
-      return {
-        emoji: "🔴",
-        label: "FAILED"
-      };
-
-    case "suspended":
-      return {
-        emoji: "🟠",
-        label: "SUSPENDED"
-      };
-
-    case "deleted":
-      return {
-        emoji: "🗑️",
-        label: "DELETED"
-      };
-
-    default:
-      return {
-        emoji: "⚪",
-        label: String(
-          status || "UNKNOWN"
-        ).toUpperCase()
-      };
-  }
-}
-
-function adminProjectsMenu() {
-  return {
-    inline_keyboard: [
-      [
-        {
-          text: "📁 All Projects",
-          callback_data:
-            "admin:projects"
-        }
-      ],
-      [
-        {
-          text: "🟢 Active",
-          callback_data:
-            "admin:projects:active"
-        },
-        {
-          text: "🔴 Failed",
-          callback_data:
-            "admin:projects:failed"
-        }
-      ],
-      [
-        {
-          text: "🚀 Deploying",
-          callback_data:
-            "admin:projects:deploying"
-        },
-        {
-          text: "🗑️ Deleted",
-          callback_data:
-            "admin:projects:deleted"
-        }
-      ],
-      [
-        {
-          text: "🔄 Refresh",
-          callback_data:
-            "admin:projects"
-        }
-      ],
-      [
-        {
-          text: "🔙 Dashboard",
-          callback_data:
-            "admin:dashboard"
-        }
-      ]
-    ]
-  };
-}
+/*
+ * ============================================================
+ * ADMIN PROJECT MANAGEMENT
+ * ============================================================
+ */
 
 export function registerAdminProjectsHandler(
   bot
@@ -131,64 +33,84 @@ export function registerAdminProjectsHandler(
       const data =
         query.data || "";
 
+      /*
+       * Only handle admin project callbacks.
+       */
       if (
         !data.startsWith(
           "admin:projects"
+        ) &&
+        !data.startsWith(
+          "admin:project:"
         )
       ) {
+        return;
+      }
+
+      const adminId =
+        String(
+          query.from?.id || ""
+        );
+
+      /*
+       * Security check
+       */
+      if (
+        !isAdmin(adminId)
+      ) {
+        await safeAnswer(
+          bot,
+          query.id,
+          "⛔ Access denied.",
+          true
+        );
+
         return;
       }
 
       const chatId =
         query.message?.chat?.id;
 
-      const userId =
-        String(query.from.id);
-
       if (!chatId) {
         return;
       }
 
-      if (!isAdmin(userId)) {
-        try {
-          await bot.answerCallbackQuery(
-            query.id,
-            {
-              text:
-                "⛔ Admin access required.",
-              show_alert: true
-            }
-          );
-        } catch {
-          // Ignore Telegram errors.
-        }
-
-        return;
-      }
-
       try {
-        await bot.answerCallbackQuery(
+        await safeAnswer(
+          bot,
           query.id
         );
+
+        /*
+         * ----------------------------------------------------
+         * ALL PROJECTS
+         * ----------------------------------------------------
+         */
 
         if (
           data ===
           "admin:projects"
         ) {
-          await showProjects(
+          await sendProjectsList(
             bot,
-            chatId
+            chatId,
+            "all"
           );
 
           return;
         }
 
+        /*
+         * ----------------------------------------------------
+         * ACTIVE PROJECTS
+         * ----------------------------------------------------
+         */
+
         if (
-          data.startsWith(
-            "admin:projects:active"
-          )
+          data ===
+          "admin:projects:active"
         ) {
-          await showProjects(
+          await sendProjectsList(
             bot,
             chatId,
             "active"
@@ -197,12 +119,17 @@ export function registerAdminProjectsHandler(
           return;
         }
 
+        /*
+         * ----------------------------------------------------
+         * FAILED PROJECTS
+         * ----------------------------------------------------
+         */
+
         if (
-          data.startsWith(
-            "admin:projects:failed"
-          )
+          data ===
+          "admin:projects:failed"
         ) {
-          await showProjects(
+          await sendProjectsList(
             bot,
             chatId,
             "failed"
@@ -211,12 +138,17 @@ export function registerAdminProjectsHandler(
           return;
         }
 
+        /*
+         * ----------------------------------------------------
+         * DEPLOYING PROJECTS
+         * ----------------------------------------------------
+         */
+
         if (
-          data.startsWith(
-            "admin:projects:deploying"
-          )
+          data ===
+          "admin:projects:deploying"
         ) {
-          await showProjects(
+          await sendProjectsList(
             bot,
             chatId,
             "deploying"
@@ -225,12 +157,17 @@ export function registerAdminProjectsHandler(
           return;
         }
 
+        /*
+         * ----------------------------------------------------
+         * DELETED PROJECTS
+         * ----------------------------------------------------
+         */
+
         if (
-          data.startsWith(
-            "admin:projects:deleted"
-          )
+          data ===
+          "admin:projects:deleted"
         ) {
-          await showProjects(
+          await sendProjectsList(
             bot,
             chatId,
             "deleted"
@@ -239,18 +176,52 @@ export function registerAdminProjectsHandler(
           return;
         }
 
+        /*
+         * ----------------------------------------------------
+         * USER PROJECTS
+         * ----------------------------------------------------
+         *
+         * admin:user:projects:<userId>
+         */
+
+        if (
+          data.startsWith(
+            "admin:user:projects:"
+          )
+        ) {
+          const userId =
+            data.slice(
+              "admin:user:projects:"
+                .length
+            );
+
+          await sendUserProjects(
+            bot,
+            chatId,
+            userId
+          );
+
+          return;
+        }
+
+        /*
+         * ----------------------------------------------------
+         * PROJECT VIEW
+         * ----------------------------------------------------
+         */
+
         if (
           data.startsWith(
             "admin:project:view:"
           )
         ) {
           const projectId =
-            data.replace(
-              "admin:project:view:",
-              ""
+            data.slice(
+              "admin:project:view:"
+                .length
             );
 
-          await showProjectDetails(
+          await sendProjectDetails(
             bot,
             chatId,
             projectId
@@ -259,25 +230,11 @@ export function registerAdminProjectsHandler(
           return;
         }
 
-        if (
-          data.startsWith(
-            "admin:project:delete:"
-          )
-        ) {
-          const projectId =
-            data.replace(
-              "admin:project:delete:",
-              ""
-            );
-
-          await confirmProjectDelete(
-            bot,
-            chatId,
-            projectId
-          );
-
-          return;
-        }
+        /*
+         * ----------------------------------------------------
+         * PROJECT DELETE
+         * ----------------------------------------------------
+         */
 
         if (
           data.startsWith(
@@ -285,78 +242,80 @@ export function registerAdminProjectsHandler(
           )
         ) {
           const projectId =
-            data.replace(
-              "admin:project:delete-confirm:",
-              ""
+            data.slice(
+              "admin:project:delete-confirm:"
+                .length
             );
 
-          await deleteAdminProject(
+          await deleteProject(
             bot,
             chatId,
             projectId
           );
+
+          return;
+        }
+
+        /*
+         * ----------------------------------------------------
+         * DELETE CONFIRMATION SCREEN
+         * ----------------------------------------------------
+         */
+
+        if (
+          data.startsWith(
+            "admin:project:delete:"
+          )
+        ) {
+          const projectId =
+            data.slice(
+              "admin:project:delete:"
+                .length
+            );
+
+          await sendDeleteConfirmation(
+            bot,
+            chatId,
+            projectId
+          );
+
+          return;
         }
       } catch (error) {
         console.error(
-          "❌ Admin project error:",
+          "❌ Admin project callback error:",
           error
         );
 
-        try {
-          await bot.sendMessage(
-            chatId,
-            "❌ Unable to process project management request."
-          );
-        } catch {
-          // Ignore Telegram errors.
-        }
+        await bot.sendMessage(
+          chatId,
+          "❌ Something went wrong while processing the project request."
+        );
       }
     }
   );
 
   console.log(
-    "🛠️ Admin project manager registered."
+    "🗂️ Admin project handler registered."
   );
 }
 
-async function showProjects(
+/*
+ * ============================================================
+ * PROJECT LIST
+ * ============================================================
+ */
+
+async function sendProjectsList(
   bot,
   chatId,
-  statusFilter = null
+  filter = "all"
 ) {
-  const [
-    projects,
-    users
-  ] = await Promise.all([
-    getProjects(),
-    getUsers()
-  ]);
+  const projects =
+    await getProjects();
 
-  let filtered =
-    [...projects];
-
-  if (statusFilter) {
-    filtered =
-      filtered.filter(
-        (project) =>
-          project.status ===
-          statusFilter
-      );
-  }
-
-  filtered.sort(
-    (a, b) =>
-      new Date(
-        b.updatedAt ||
-          b.createdAt ||
-          0
-      ) -
-      new Date(
-        a.updatedAt ||
-          a.createdAt ||
-          0
-      )
-  );
+  const users =
+    await getUsers();
 
   const userMap =
     new Map(
@@ -368,80 +327,171 @@ async function showProjects(
       )
     );
 
-  const title =
-    statusFilter
-      ? `${statusInfo(statusFilter).emoji} ${statusFilter.toUpperCase()} PROJECTS`
-      : "🌐 ALL HOSTING PROJECTS";
+  let filtered =
+    projects;
 
-  const lines = [
-    `<b>${title}</b>`,
-    "",
-    `📁 Showing: <b>${filtered.length}</b>`,
-    `👥 Total Users: <b>${users.length}</b>`,
-    "",
-    "━━━━━━━━━━━━━━━━━━━━"
-  ];
-
-  if (!filtered.length) {
-    lines.push(
-      "",
-      "📭 <b>No projects found.</b>",
-      "",
-      "Try another filter."
-    );
-  } else {
-    const visibleProjects =
-      filtered.slice(0, 20);
-
-    visibleProjects.forEach(
-      (project, index) => {
-        const status =
-          statusInfo(
-            project.status
-          );
-
-        const owner =
-          userMap.get(
-            String(
-              project.userId
-            )
-          );
-
-        const ownerName =
-          [
-            owner?.firstName,
-            owner?.lastName
-          ]
-            .filter(Boolean)
-            .join(" ") ||
-          owner?.username ||
-          "Unknown user";
-
-        lines.push(
-          "",
-          `${index + 1}. ${status.emoji} <b>${escapeHtml(project.name || "Untitled")}</b>`,
-          `   🆔 <code>${escapeHtml(project.id)}</code>`,
-          `   👤 ${escapeHtml(ownerName)}`,
-          `   📌 ${status.label}`,
-          project.url
-            ? `   🌐 ${escapeHtml(project.url)}`
-            : "   🌐 No URL"
-        );
-      }
-    );
-
-    if (filtered.length > 20) {
-      lines.push(
-        "",
-        `ℹ️ Showing first <b>20</b> of <b>${filtered.length}</b> projects.`
+  if (
+    filter !== "all"
+  ) {
+    filtered =
+      projects.filter(
+        (project) =>
+          project.status ===
+          filter
       );
-    }
   }
 
-  const keyboard =
-    buildProjectButtons(
-      filtered.slice(0, 20)
+  /*
+   * Newest projects first.
+   */
+  filtered =
+    [...filtered].sort(
+      (a, b) =>
+        new Date(
+          b.createdAt || 0
+        ).getTime() -
+        new Date(
+          a.createdAt || 0
+        ).getTime()
     );
+
+  const total =
+    filtered.length;
+
+  /*
+   * Telegram-friendly limit.
+   */
+  const visible =
+    filtered.slice(
+      0,
+      20
+    );
+
+  const filterTitle =
+    getFilterTitle(
+      filter
+    );
+
+  const lines = [
+    `🗂️ <b>${filterTitle}</b>`,
+    "",
+    `📊 <b>Total:</b> ${total}`
+  ];
+
+  if (
+    total > 20
+  ) {
+    lines.push(
+      "ℹ️ Showing latest 20 projects."
+    );
+  }
+
+  lines.push(
+    ""
+  );
+
+  if (
+    visible.length === 0
+  ) {
+    lines.push(
+      "📭 No projects found."
+    );
+  }
+
+  const buttons = [];
+
+  for (
+    const project of visible
+  ) {
+    const owner =
+      userMap.get(
+        String(
+          project.userId
+        )
+      );
+
+    const ownerName =
+      getUserDisplayName(
+        owner,
+        project.userId
+      );
+
+    const status =
+      getStatusEmoji(
+        project.status
+      );
+
+    const name =
+      truncate(
+        project.name ||
+          "Untitled Project",
+        32
+      );
+
+    lines.push(
+      `${status} <b>${escapeHtml(
+        name
+      )}</b>`,
+      `   👤 ${escapeHtml(
+        ownerName
+      )}`,
+      `   🆔 <code>${escapeHtml(
+        project.id
+      )}</code>`,
+      ""
+    );
+
+    buttons.push([
+      {
+        text:
+          `${status} ${name}`,
+        callback_data:
+          `admin:project:view:${project.id}`
+      }
+    ]);
+  }
+
+  buttons.push([
+    {
+      text: "🟢 Active",
+      callback_data:
+        "admin:projects:active"
+    },
+    {
+      text: "⏳ Deploying",
+      callback_data:
+        "admin:projects:deploying"
+    }
+  ]);
+
+  buttons.push([
+    {
+      text: "❌ Failed",
+      callback_data:
+        "admin:projects:failed"
+    },
+    {
+      text: "🗑️ Deleted",
+      callback_data:
+        "admin:projects:deleted"
+    }
+  ]);
+
+  buttons.push([
+    {
+      text: "📋 All Projects",
+      callback_data:
+        "admin:projects"
+    }
+  ]);
+
+  buttons.push([
+    {
+      text: "⬅️ Admin Dashboard",
+      callback_data:
+        "admin:dashboard"
+    }
+  ]);
 
   await bot.sendMessage(
     chatId,
@@ -449,69 +499,244 @@ async function showProjects(
     {
       parse_mode: "HTML",
       reply_markup: {
-        inline_keyboard: [
-          ...keyboard,
-          ...adminProjectsMenu()
-            .inline_keyboard
-        ]
-      },
-      disable_web_page_preview: true
+        inline_keyboard:
+          buttons
+      }
     }
   );
 }
 
-function buildProjectButtons(
-  projects
+/*
+ * ============================================================
+ * USER PROJECTS
+ * ============================================================
+ */
+
+async function sendUserProjects(
+  bot,
+  chatId,
+  userId
 ) {
+  const [
+    projects,
+    users
+  ] = await Promise.all([
+    getProjects(),
+    getUsers()
+  ]);
+
+  const user =
+    users.find(
+      (item) =>
+        String(item.id) ===
+        String(userId)
+    );
+
+  if (!user) {
+    await bot.sendMessage(
+      chatId,
+      "❌ User not found.",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: "⬅️ Users",
+                callback_data:
+                  "admin:users"
+              }
+            ]
+          ]
+        }
+      }
+    );
+
+    return;
+  }
+
+  const userProjects =
+    projects
+      .filter(
+        (project) =>
+          String(
+            project.userId
+          ) ===
+          String(userId)
+      )
+      .sort(
+        (a, b) =>
+          new Date(
+            b.createdAt || 0
+          ).getTime() -
+          new Date(
+            a.createdAt || 0
+          ).getTime()
+      );
+
+  const active =
+    userProjects.filter(
+      (project) =>
+        project.status ===
+        "active"
+    ).length;
+
+  const deploying =
+    userProjects.filter(
+      (project) =>
+        project.status ===
+        "deploying"
+    ).length;
+
+  const failed =
+    userProjects.filter(
+      (project) =>
+        project.status ===
+        "failed"
+    ).length;
+
+  const deleted =
+    userProjects.filter(
+      (project) =>
+        project.status ===
+        "deleted"
+    ).length;
+
+  const lines = [
+    "📁 <b>User Projects</b>",
+    "",
+    `👤 <b>User:</b> ${escapeHtml(
+      getUserDisplayName(
+        user,
+        userId
+      )
+    )}`,
+    `🆔 <code>${escapeHtml(
+      userId
+    )}</code>`,
+    "",
+    `📊 <b>Total:</b> ${userProjects.length}`,
+    `🟢 <b>Active:</b> ${active}`,
+    `⏳ <b>Deploying:</b> ${deploying}`,
+    `❌ <b>Failed:</b> ${failed}`,
+    `🗑️ <b>Deleted:</b> ${deleted}`,
+    ""
+  ];
+
   const buttons = [];
 
-  for (
-    let index = 0;
-    index < projects.length;
-    index++
+  const visible =
+    userProjects.slice(
+      0,
+      20
+    );
+
+  if (
+    visible.length === 0
   ) {
-    const project =
-      projects[index];
+    lines.push(
+      "📭 This user has no projects."
+    );
+  }
+
+  for (
+    const project of visible
+  ) {
+    const status =
+      getStatusEmoji(
+        project.status
+      );
+
+    const name =
+      truncate(
+        project.name ||
+          "Untitled Project",
+        32
+      );
+
+    lines.push(
+      `${status} <b>${escapeHtml(
+        name
+      )}</b>`,
+      `   🆔 <code>${escapeHtml(
+        project.id
+      )}</code>`,
+      `   📌 ${escapeHtml(
+        project.status ||
+          "unknown"
+      )}`,
+      ""
+    );
 
     buttons.push([
       {
         text:
-          `${statusInfo(project.status).emoji} ${truncate(
-            project.name ||
-              "Untitled",
-            28
-          )}`,
+          `${status} ${name}`,
         callback_data:
           `admin:project:view:${project.id}`
       }
     ]);
   }
 
-  return buttons;
+  buttons.push([
+    {
+      text: "👤 User Details",
+      callback_data:
+        `admin:user:view:${userId}`
+    }
+  ]);
+
+  buttons.push([
+    {
+      text: "⬅️ Users",
+      callback_data:
+        "admin:users"
+    }
+  ]);
+
+  await bot.sendMessage(
+    chatId,
+    lines.join("\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard:
+          buttons
+      }
+    }
+  );
 }
 
-async function showProjectDetails(
+/*
+ * ============================================================
+ * PROJECT DETAILS
+ * ============================================================
+ */
+
+async function sendProjectDetails(
   bot,
   chatId,
   projectId
 ) {
-  const project =
-    await getProject(
-      String(projectId)
-    );
+  const [
+    project,
+    users
+  ] = await Promise.all([
+    getProject(
+      projectId
+    ),
+    getUsers()
+  ]);
 
   if (!project) {
     await bot.sendMessage(
       chatId,
-      "❌ <b>Project not found.</b>",
+      "❌ Project not found.",
       {
-        parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [
             [
               {
-                text:
-                  "🔙 Projects",
+                text: "⬅️ Projects",
                 callback_data:
                   "admin:projects"
               }
@@ -524,9 +749,36 @@ async function showProjectDetails(
     return;
   }
 
+  const owner =
+    users.find(
+      (user) =>
+        String(
+          user.id
+        ) ===
+        String(
+          project.userId
+        )
+    );
+
   const status =
-    statusInfo(
-      project.status
+    project.status ||
+    "unknown";
+
+  const statusEmoji =
+    getStatusEmoji(
+      status
+    );
+
+  const fileCount =
+    project.fileCount ??
+    project.files ??
+    0;
+
+  const size =
+    formatBytes(
+      project.size ||
+        project.totalSize ||
+        0
     );
 
   const createdAt =
@@ -544,51 +796,81 @@ async function showProjectDetails(
       project.deployedAt
     );
 
-  const totalSize =
-    formatBytes(
-      project.totalSize
-    );
+  const provider =
+    project.provider ||
+    "Not deployed";
 
-  const text = [
-    "🌐 <b>PROJECT DETAILS</b>",
+  const providerProject =
+    project.providerProject ||
+    "Not assigned";
+
+  const liveUrl =
+    project.url ||
+    project.deploymentUrl ||
+    "";
+
+  const lines = [
+    "📦 <b>Project Details</b>",
     "",
-    "━━━━━━━━━━━━━━━━━━━━",
+    `📛 <b>Name:</b> ${escapeHtml(
+      project.name ||
+        "Untitled"
+    )}`,
+    `🆔 <b>Project ID:</b> <code>${escapeHtml(
+      project.id
+    )}</code>`,
     "",
-    `📁 <b>Name:</b> ${escapeHtml(project.name)}`,
-    `🆔 <b>Project ID:</b> <code>${escapeHtml(project.id)}</code>`,
-    `👤 <b>User ID:</b> <code>${escapeHtml(project.userId)}</code>`,
+    `${statusEmoji} <b>Status:</b> ${escapeHtml(
+      status
+    )}`,
+    `☁️ <b>Provider:</b> ${escapeHtml(
+      provider
+    )}`,
+    `🔗 <b>Provider Project:</b> <code>${escapeHtml(
+      providerProject
+    )}</code>`,
     "",
-    `${status.emoji} <b>Status:</b> ${status.label}`,
+    `👤 <b>Owner:</b> ${escapeHtml(
+      getUserDisplayName(
+        owner,
+        project.userId
+      )
+    )}`,
+    `🆔 <b>User ID:</b> <code>${escapeHtml(
+      project.userId
+    )}</code>`,
     "",
-    `☁️ <b>Provider:</b> ${escapeHtml(project.provider || "Not deployed")}`,
-    `📦 <b>Files:</b> ${Number(project.fileCount || 0)}`,
-    `💾 <b>Size:</b> ${totalSize}`,
+    `📄 <b>Files:</b> ${fileCount}`,
+    `💾 <b>Size:</b> ${size}`,
     "",
     `🌐 <b>Live URL:</b> ${
-      project.url
-        ? escapeHtml(project.url)
+      liveUrl
+        ? escapeHtml(
+            liveUrl
+          )
         : "Not available"
     }`,
     "",
     `📅 <b>Created:</b> ${createdAt}`,
     `🔄 <b>Updated:</b> ${updatedAt}`,
-    `🚀 <b>Deployed:</b> ${deployedAt}`,
-    "",
-    "━━━━━━━━━━━━━━━━━━━━"
+    `🚀 <b>Deployed:</b> ${deployedAt}`
   ];
 
-  const keyboard = [];
+  const buttons = [];
 
-  if (project.url) {
-    keyboard.push([
+  if (
+    liveUrl &&
+    status === "active"
+  ) {
+    buttons.push([
       {
         text: "🌐 Open Website",
-        url: project.url
+        url: liveUrl
       }
     ]);
   }
 
-  keyboard.push([
+  buttons.push([
     {
       text: "🗑️ Delete Project",
       callback_data:
@@ -596,42 +878,57 @@ async function showProjectDetails(
     }
   ]);
 
-  keyboard.push([
+  buttons.push([
     {
-      text: "🔙 Projects",
+      text: "👤 View Owner",
+      callback_data:
+        `admin:user:view:${project.userId}`
+    }
+  ]);
+
+  buttons.push([
+    {
+      text: "📁 Owner Projects",
+      callback_data:
+        `admin:user:projects:${project.userId}`
+    }
+  ]);
+
+  buttons.push([
+    {
+      text: "⬅️ Projects",
       callback_data:
         "admin:projects"
-    },
-    {
-      text: "🛡️ Dashboard",
-      callback_data:
-        "admin:dashboard"
     }
   ]);
 
   await bot.sendMessage(
     chatId,
-    text.join("\n"),
+    lines.join("\n"),
     {
       parse_mode: "HTML",
       reply_markup: {
         inline_keyboard:
-          keyboard
-      },
-      disable_web_page_preview:
-        true
+          buttons
+      }
     }
   );
 }
 
-async function confirmProjectDelete(
+/*
+ * ============================================================
+ * DELETE CONFIRMATION
+ * ============================================================
+ */
+
+async function sendDeleteConfirmation(
   bot,
   chatId,
   projectId
 ) {
   const project =
     await getProject(
-      String(projectId)
+      projectId
     );
 
   if (!project) {
@@ -643,26 +940,27 @@ async function confirmProjectDelete(
     return;
   }
 
-  const text = [
-    "⚠️ <b>DELETE PROJECT?</b>",
-    "",
-    `📁 <b>${escapeHtml(project.name || "Untitled")}</b>`,
-    "",
-    `🆔 <code>${escapeHtml(project.id)}</code>`,
-    "",
-    "This action will:",
-    "• Remove the project from hosting",
-    "• Remove its Cloudflare Pages project when available",
-    "• Mark the project as deleted",
-    "",
-    "⚠️ <b>This action cannot be undone from the bot.</b>",
-    "",
-    "Are you sure?"
-  ].join("\n");
-
   await bot.sendMessage(
     chatId,
-    text,
+    [
+      "⚠️ <b>Delete Project?</b>",
+      "",
+      `📛 <b>Name:</b> ${escapeHtml(
+        project.name ||
+          "Untitled"
+      )}`,
+      `🆔 <code>${escapeHtml(
+        project.id
+      )}</code>`,
+      "",
+      "This will:",
+      "• Remove the Cloudflare Pages deployment when possible",
+      "• Mark the project as deleted",
+      "• Remove local project storage",
+      "• Remove its live URL from the database",
+      "",
+      "⚠️ <b>This action cannot be undone from the admin panel.</b>"
+    ].join("\n"),
     {
       parse_mode: "HTML",
       reply_markup: {
@@ -676,7 +974,7 @@ async function confirmProjectDelete(
           ],
           [
             {
-              text: "🔙 Cancel",
+              text: "↩️ Cancel",
               callback_data:
                 `admin:project:view:${project.id}`
             }
@@ -687,14 +985,20 @@ async function confirmProjectDelete(
   );
 }
 
-async function deleteAdminProject(
+/*
+ * ============================================================
+ * DELETE PROJECT
+ * ============================================================
+ */
+
+async function deleteProject(
   bot,
   chatId,
   projectId
 ) {
   const project =
     await getProject(
-      String(projectId)
+      projectId
     );
 
   if (!project) {
@@ -706,139 +1010,298 @@ async function deleteAdminProject(
     return;
   }
 
-  const processing =
+  /*
+   * Prevent duplicate deletion.
+   */
+  if (
+    project.status ===
+    "deleted"
+  ) {
     await bot.sendMessage(
       chatId,
-      "🗑️ <b>Deleting project...</b>\n\nPlease wait.",
+      "ℹ️ This project is already deleted.",
       {
-        parse_mode: "HTML"
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: "⬅️ Projects",
+                callback_data:
+                  "admin:projects"
+              }
+            ]
+          ]
+        }
       }
     );
 
-  let cloudflareDeleted =
-    false;
+    return;
+  }
 
-  let cloudflareError =
-    null;
+  let cloudflareResult =
+    "not-required";
 
-  try {
-    if (
-      project.providerProject
-    ) {
-      try {
+  /*
+   * ----------------------------------------------------------
+   * Delete Cloudflare Pages project
+   * ----------------------------------------------------------
+   */
+
+  if (
+    project.providerProject
+  ) {
+    try {
+      const result =
         await deleteCloudflareProject(
           project.providerProject
         );
 
-        cloudflareDeleted =
-          true;
-      } catch (error) {
-        cloudflareError =
-          error.message;
+      cloudflareResult =
+        result === false
+          ? "failed"
+          : "deleted";
+    } catch (error) {
+      console.error(
+        "❌ Cloudflare project deletion failed:",
+        error
+      );
 
-        console.error(
-          "Cloudflare project deletion failed:",
-          error
-        );
-      }
+      cloudflareResult =
+        "failed";
     }
+  }
 
-    await updateProject(
-      String(project.id),
-      {
-        status: "deleted",
-        url: null,
-        deploymentUrl: null,
-        deploymentStatus:
-          cloudflareDeleted
-            ? "deleted"
-            : "cloudflare-delete-failed",
-        updatedAt:
-          new Date().toISOString(),
-        deletedAt:
-          new Date().toISOString()
-      }
-    );
+  /*
+   * ----------------------------------------------------------
+   * Remove local storage
+   * ----------------------------------------------------------
+   */
 
-    const resultText = [
-      "✅ <b>PROJECT DELETED</b>",
-      "",
-      `📁 <b>Project:</b> ${escapeHtml(project.name)}`,
-      `🆔 <code>${escapeHtml(project.id)}</code>`,
-      "",
-      cloudflareDeleted
-        ? "☁️ Cloudflare project: <b>Deleted</b>"
-        : project.providerProject
-          ? "☁️ Cloudflare project: <b>Could not be deleted</b>"
-          : "☁️ Cloudflare project: <b>Not configured</b>",
-      "",
-      cloudflareError
-        ? `⚠️ ${escapeHtml(cloudflareError)}`
-        : "",
-      "🗑️ Database status: <b>Deleted</b>"
-    ]
-      .filter(Boolean)
-      .join("\n");
+  let storageResult =
+    "not-found";
 
-    await bot.editMessageText(
-      resultText,
-      {
-        chat_id: chatId,
-        message_id:
-          processing.message_id,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🌐 Projects",
-                callback_data:
-                  "admin:projects"
-              }
-            ],
-            [
-              {
-                text: "🛡️ Dashboard",
-                callback_data:
-                  "admin:dashboard"
-              }
-            ]
-          ]
-        }
-      }
-    );
+  try {
+    const removed =
+      await removeProjectStorage(
+        project.id
+      );
+
+    storageResult =
+      removed
+        ? "deleted"
+        : "not-found";
   } catch (error) {
     console.error(
-      "❌ Admin project deletion failed:",
+      "❌ Local project storage cleanup failed:",
       error
     );
 
-    await bot.editMessageText(
-      "❌ <b>Project deletion failed.</b>\n\n" +
-        escapeHtml(
-          error.message ||
-            "Unknown error"
-        ),
+    storageResult =
+      "failed";
+  }
+
+  /*
+   * ----------------------------------------------------------
+   * Update database
+   * ----------------------------------------------------------
+   */
+
+  const updated =
+    await updateProject(
+      project.id,
       {
-        chat_id: chatId,
-        message_id:
-          processing.message_id,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text:
-                  "🔙 Project",
-                callback_data:
-                  `admin:project:view:${project.id}`
-              }
-            ]
-          ]
-        }
+        status:
+          "deleted",
+
+        url: "",
+
+        deploymentUrl: "",
+
+        deploymentStatus:
+          cloudflareResult ===
+          "failed"
+            ? "cloudflare-delete-failed"
+            : "deleted",
+
+        deletedAt:
+          new Date().toISOString(),
+
+        localStorageStatus:
+          storageResult
       }
     );
+
+  if (!updated) {
+    await bot.sendMessage(
+      chatId,
+      "❌ Project could not be updated in the database."
+    );
+
+    return;
   }
+
+  /*
+   * ----------------------------------------------------------
+   * Result
+   * ----------------------------------------------------------
+   */
+
+  const cloudflareText =
+    cloudflareResult ===
+    "deleted"
+      ? "✅ Cloudflare deployment removed"
+      : cloudflareResult ===
+        "failed"
+      ? "⚠️ Cloudflare removal failed"
+      : "ℹ️ No Cloudflare deployment";
+
+  const storageText =
+    storageResult ===
+    "deleted"
+      ? "✅ Local files removed"
+      : storageResult ===
+        "failed"
+      ? "⚠️ Local file cleanup failed"
+      : "ℹ️ No local files found";
+
+  await bot.sendMessage(
+    chatId,
+    [
+      "🗑️ <b>Project Deleted</b>",
+      "",
+      `📛 <b>Project:</b> ${escapeHtml(
+        project.name ||
+          "Untitled"
+      )}`,
+      `🆔 <code>${escapeHtml(
+        project.id
+      )}</code>`,
+      "",
+      cloudflareText,
+      storageText,
+      "✅ Database status updated",
+      "",
+      "The project has been removed from active hosting."
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: "🗂️ All Projects",
+              callback_data:
+                "admin:projects"
+            }
+          ],
+          [
+            {
+              text: "🟢 Active Projects",
+              callback_data:
+                "admin:projects:active"
+            }
+          ],
+          [
+            {
+              text: "⬅️ Admin Dashboard",
+              callback_data:
+                "admin:dashboard"
+            }
+          ]
+        ]
+      }
+    }
+  );
+}
+
+/*
+ * ============================================================
+ * HELPERS
+ * ============================================================
+ */
+
+function getFilterTitle(
+  filter
+) {
+  switch (filter) {
+    case "active":
+      return "Active Projects";
+
+    case "failed":
+      return "Failed Projects";
+
+    case "deploying":
+      return "Deploying Projects";
+
+    case "deleted":
+      return "Deleted Projects";
+
+    default:
+      return "All Projects";
+  }
+}
+
+function getStatusEmoji(
+  status
+) {
+  switch (
+    String(
+      status || ""
+    ).toLowerCase()
+  ) {
+    case "active":
+      return "🟢";
+
+    case "deploying":
+      return "⏳";
+
+    case "pending":
+      return "🟡";
+
+    case "failed":
+      return "❌";
+
+    case "suspended":
+      return "⛔";
+
+    case "deleted":
+      return "🗑️";
+
+    default:
+      return "⚪";
+  }
+}
+
+function getUserDisplayName(
+  user,
+  fallbackId
+) {
+  if (!user) {
+    return `User ${fallbackId}`;
+  }
+
+  const fullName =
+    [
+      user.firstName,
+      user.lastName
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+
+  if (
+    fullName
+  ) {
+    return fullName;
+  }
+
+  if (
+    user.username
+  ) {
+    return `@${user.username}`;
+  }
+
+  return `User ${user.id}`;
 }
 
 function truncate(
@@ -846,10 +1309,13 @@ function truncate(
   maxLength
 ) {
   const text =
-    String(value || "");
+    String(
+      value || ""
+    );
 
   if (
-    text.length <= maxLength
+    text.length <=
+    maxLength
   ) {
     return text;
   }
@@ -866,7 +1332,7 @@ function formatDate(
   value
 ) {
   if (!value) {
-    return "Not available";
+    return "N/A";
   }
 
   const date =
@@ -877,15 +1343,17 @@ function formatDate(
       date.getTime()
     )
   ) {
-    return "Not available";
+    return "N/A";
   }
 
   return date.toLocaleString(
-    "en-GB",
+    "en-US",
     {
-      dateStyle: "medium",
-      timeStyle: "short",
-      timeZone: "UTC"
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
     }
   );
 }
@@ -894,9 +1362,14 @@ function formatBytes(
   bytes
 ) {
   const value =
-    Number(bytes) || 0;
+    Number(bytes);
 
-  if (value <= 0) {
+  if (
+    !Number.isFinite(
+      value
+    ) ||
+    value <= 0
+  ) {
     return "0 B";
   }
 
@@ -904,8 +1377,7 @@ function formatBytes(
     "B",
     "KB",
     "MB",
-    "GB",
-    "TB"
+    "GB"
   ];
 
   const index =
@@ -919,12 +1391,60 @@ function formatBytes(
 
   return `${(
     value /
-    Math.pow(1024, index)
+    Math.pow(
+      1024,
+      index
+    )
   ).toFixed(
     index === 0 ? 0 : 2
   )} ${units[index]}`;
 }
 
-export default {
-  registerAdminProjectsHandler
-};
+function escapeHtml(
+  value
+) {
+  return String(
+    value ?? ""
+  )
+    .replace(
+      /&/g,
+      "&amp;"
+    )
+    .replace(
+      /</g,
+      "&lt;"
+    )
+    .replace(
+      />/g,
+      "&gt;"
+    )
+    .replace(
+      /"/g,
+      "&quot;"
+    )
+    .replace(
+      /'/g,
+      "&#039;"
+    );
+}
+
+async function safeAnswer(
+  bot,
+  queryId,
+  text,
+  showAlert = false
+) {
+  try {
+    await bot.answerCallbackQuery(
+      queryId,
+      {
+        text,
+        show_alert:
+          showAlert
+      }
+    );
+  } catch {
+    // Callback may already have been answered.
+  }
+}
+```
