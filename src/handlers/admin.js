@@ -9,7 +9,7 @@ import {
   testCloudflareConnection
 } from "../services/deployer.js";
 
-function isAdmin(userId) {
+export function isAdmin(userId) {
   return config.adminIds.includes(
     String(userId)
   );
@@ -24,137 +24,112 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-function dashboardKeyboard() {
-  return {
-    inline_keyboard: [
-      [
-        {
-          text: "📊 Statistics",
-          callback_data:
-            "admin:stats"
-        },
-        {
-          text: "👥 Users",
-          callback_data:
-            "admin:users"
-        }
-      ],
-      [
-        {
-          text: "🌐 Projects",
-          callback_data:
-            "admin:projects"
-        },
-        {
-          text: "☁️ Cloudflare",
-          callback_data:
-            "admin:cloudflare"
-        }
-      ],
-      [
-        {
-          text: "🔄 Refresh",
-          callback_data:
-            "admin:dashboard"
-        }
-      ],
-      [
-        {
-          text: "🔙 Main Menu",
-          callback_data:
-            "main_menu"
-        }
-      ]
+function getUserName(user) {
+  return (
+    [
+      user?.firstName,
+      user?.lastName
     ]
-  };
+      .filter(Boolean)
+      .join(" ")
+      .trim() ||
+    "Unknown User"
+  );
 }
 
-export function registerAdminHandler(
-  bot
-) {
-  /*
-   * /admin command
-   */
-  bot.onText(
-    /^\/admin$/i,
-    async (message) => {
-      try {
-        const userId =
-          String(message.from.id);
+function formatDate(value) {
+  if (!value) {
+    return "N/A";
+  }
 
-        if (!isAdmin(userId)) {
-          await bot.sendMessage(
-            message.chat.id,
-            [
-              "⛔ <b>ACCESS DENIED</b>",
-              "",
-              "You are not authorized to access the admin panel."
-            ].join("\n"),
-            {
-              parse_mode: "HTML"
-            }
-          );
+  const date = new Date(value);
 
-          return;
-        }
+  if (Number.isNaN(date.getTime())) {
+    return "N/A";
+  }
 
-        await sendAdminDashboard(
-          bot,
-          message.chat.id
-        );
-      } catch (error) {
-        console.error(
-          "❌ Admin command error:",
-          error
-        );
+  return date.toLocaleString("en-GB", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC"
+  });
+}
 
-        try {
-          await bot.sendMessage(
-            message.chat.id,
-            "❌ Unable to open admin panel."
-          );
-        } catch {
-          // Ignore Telegram errors.
-        }
+export function registerAdminHandler(bot) {
+  bot.on(
+    "message",
+    async (msg) => {
+      if (!msg.text) {
+        return;
       }
+
+      if (msg.text !== "/admin") {
+        return;
+      }
+
+      const userId =
+        String(msg.from.id);
+
+      if (!isAdmin(userId)) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "⛔ <b>Access Denied</b>\n\nYou don't have permission to access the admin panel.",
+          {
+            parse_mode: "HTML"
+          }
+        );
+
+        return;
+      }
+
+      await sendDashboard(
+        bot,
+        msg.chat.id
+      );
     }
   );
 
-  /*
-   * Only handle the core admin
-   * callbacks here.
-   *
-   * Project-specific callbacks are
-   * handled by adminProjects.js.
-   */
   bot.on(
     "callback_query",
     async (query) => {
       const data =
         query.data || "";
 
-      const coreCallbacks = [
-        "admin:dashboard",
-        "admin:stats",
-        "admin:users",
-        "admin:cloudflare"
-      ];
-
+      /*
+       * User Management callbacks
+       * are handled by adminUsers.js.
+       */
       if (
-        !coreCallbacks.includes(data)
+        data.startsWith(
+          "admin:user:"
+        )
       ) {
         return;
       }
 
-      const chatId =
-        query.message?.chat?.id;
+      /*
+       * Project Management callbacks
+       * are handled by adminProjects.js.
+       */
+      if (
+        data.startsWith(
+          "admin:project:"
+        ) ||
+        data.startsWith(
+          "admin:projects"
+        )
+      ) {
+        return;
+      }
+
+      if (
+        !data.startsWith("admin:")
+      ) {
+        return;
+      }
 
       const userId =
         String(query.from.id);
-
-      if (!chatId) {
-        return;
-      }
 
       if (!isAdmin(userId)) {
         try {
@@ -167,9 +142,16 @@ export function registerAdminHandler(
             }
           );
         } catch {
-          // Ignore callback errors.
+          // Ignore Telegram errors.
         }
 
+        return;
+      }
+
+      const chatId =
+        query.message?.chat?.id;
+
+      if (!chatId) {
         return;
       }
 
@@ -180,7 +162,7 @@ export function registerAdminHandler(
 
         switch (data) {
           case "admin:dashboard":
-            await sendAdminDashboard(
+            await sendDashboard(
               bot,
               chatId
             );
@@ -219,7 +201,7 @@ export function registerAdminHandler(
         try {
           await bot.sendMessage(
             chatId,
-            "❌ Admin panel request failed."
+            "❌ Something went wrong while processing the admin request."
           );
         } catch {
           // Ignore Telegram errors.
@@ -229,71 +211,81 @@ export function registerAdminHandler(
   );
 
   console.log(
-    "🛡️ Admin core handler registered."
+    "🛡️ Admin handler registered."
   );
 }
 
-async function sendAdminDashboard(
+async function sendDashboard(
   bot,
   chatId
 ) {
-  const statistics =
+  const stats =
     await getStatistics();
 
-  const totalUsers =
-    Number(
-      statistics?.totalUsers || 0
-    );
-
-  const totalProjects =
-    Number(
-      statistics?.totalProjects || 0
-    );
-
-  const activeProjects =
-    Number(
-      statistics?.activeProjects || 0
-    );
-
-  const deployingProjects =
-    Number(
-      statistics?.deployingProjects || 0
-    );
-
-  const failedProjects =
-    Number(
-      statistics?.failedProjects || 0
-    );
-
   const text = [
-    "🛡️ <b>ADMIN CONTROL CENTER</b>",
+    "🛡️ <b>METRO HOSTING ADMIN</b>",
+    "",
+    "Welcome to your hosting control center.",
     "",
     "━━━━━━━━━━━━━━━━━━━━",
     "",
-    "📊 <b>PLATFORM OVERVIEW</b>",
+    "📊 <b>OVERVIEW</b>",
     "",
-    `👥 Users: <b>${totalUsers}</b>`,
-    `📁 Projects: <b>${totalProjects}</b>`,
-    `🟢 Active: <b>${activeProjects}</b>`,
-    `🚀 Deploying: <b>${deployingProjects}</b>`,
-    `🔴 Failed: <b>${failedProjects}</b>`,
+    `👥 Users: <b>${stats.users}</b>`,
+    `📁 Projects: <b>${stats.projects}</b>`,
+    `🟢 Active: <b>${stats.active}</b>`,
+    `🚀 Deploying: <b>${stats.deploying}</b>`,
+    `🔴 Failed: <b>${stats.failed}</b>`,
     "",
-    "☁️ Hosting: <b>Cloudflare Pages</b>",
-    "🤖 Bot: <b>Online</b>",
-    "",
-    "━━━━━━━━━━━━━━━━━━━━",
-    "",
-    "🔐 <b>Administrator Mode</b>",
-    "",
-    "Manage users, hosted projects, statistics and hosting infrastructure from this panel."
+    "━━━━━━━━━━━━━━━━━━━━"
   ].join("\n");
+
+  const keyboard = {
+    inline_keyboard: [
+      [
+        {
+          text: "📊 Statistics",
+          callback_data:
+            "admin:stats"
+        },
+        {
+          text: "👥 Users",
+          callback_data:
+            "admin:users"
+        }
+      ],
+      [
+        {
+          text: "📁 Projects",
+          callback_data:
+            "admin:projects"
+        }
+      ],
+      [
+        {
+          text: "☁️ Cloudflare",
+          callback_data:
+            "admin:cloudflare"
+        }
+      ],
+      [
+        {
+          text: "📢 Broadcast",
+          callback_data:
+            "admin:broadcast"
+        }
+      ]
+    ]
+  };
 
   await bot.sendMessage(
     chatId,
     text,
     {
       parse_mode: "HTML",
-      ...dashboardKeyboard()
+      reply_markup: keyboard,
+      disable_web_page_preview:
+        true
     }
   );
 }
@@ -302,67 +294,36 @@ async function sendStatistics(
   bot,
   chatId
 ) {
-  const statistics =
+  const stats =
     await getStatistics();
 
-  const totalUsers =
-    Number(
-      statistics?.totalUsers || 0
-    );
-
-  const totalProjects =
-    Number(
-      statistics?.totalProjects || 0
-    );
-
-  const active =
-    Number(
-      statistics?.activeProjects || 0
-    );
-
-  const deploying =
-    Number(
-      statistics?.deployingProjects || 0
-    );
-
-  const pending =
-    Number(
-      statistics?.pendingProjects || 0
-    );
-
-  const failed =
-    Number(
-      statistics?.failedProjects || 0
-    );
-
-  const suspended =
-    Number(
-      statistics?.suspendedProjects || 0
-    );
-
-  const deleted =
-    Number(
-      statistics?.deletedProjects || 0
-    );
+  const successRate =
+    stats.projects > 0
+      ? Math.round(
+          (stats.active /
+            stats.projects) *
+            100
+        )
+      : 0;
 
   const text = [
-    "📊 <b>PLATFORM STATISTICS</b>",
+    "📊 <b>HOSTING STATISTICS</b>",
     "",
     "━━━━━━━━━━━━━━━━━━━━",
     "",
     "👥 <b>USERS</b>",
     "",
-    `Total Users: <b>${totalUsers}</b>`,
+    `👤 Total Users: <b>${stats.users}</b>`,
     "",
     "📁 <b>PROJECTS</b>",
     "",
-    `Total: <b>${totalProjects}</b>`,
-    `🟢 Active: <b>${active}</b>`,
-    `🚀 Deploying: <b>${deploying}</b>`,
-    `⏳ Pending: <b>${pending}</b>`,
-    `🔴 Failed: <b>${failed}</b>`,
-    `🟠 Suspended: <b>${suspended}</b>`,
-    `🗑️ Deleted: <b>${deleted}</b>`,
+    `📦 Total: <b>${stats.projects}</b>`,
+    `🟢 Active: <b>${stats.active}</b>`,
+    `🚀 Deploying: <b>${stats.deploying}</b>`,
+    `🔴 Failed: <b>${stats.failed}</b>`,
+    `🗑️ Deleted: <b>${stats.deleted}</b>`,
+    "",
+    `📈 Success Rate: <b>${successRate}%</b>`,
     "",
     "━━━━━━━━━━━━━━━━━━━━"
   ].join("\n");
@@ -376,9 +337,14 @@ async function sendStatistics(
         inline_keyboard: [
           [
             {
-              text: "🔄 Refresh",
+              text: "👥 Users",
               callback_data:
-                "admin:stats"
+                "admin:users"
+            },
+            {
+              text: "📁 Projects",
+              callback_data:
+                "admin:projects"
             }
           ],
           [
@@ -402,91 +368,93 @@ async function sendUsers(
     await getUsers();
 
   const sortedUsers =
-    [...users]
-      .sort(
-        (a, b) =>
-          new Date(
-            b.updatedAt ||
-              b.createdAt ||
-              0
-          ) -
-          new Date(
-            a.updatedAt ||
-              a.createdAt ||
-              0
-          )
-      )
-      .slice(0, 20);
+    [...users].sort(
+      (a, b) =>
+        new Date(
+          b.updatedAt ||
+            b.createdAt ||
+            0
+        ) -
+        new Date(
+          a.updatedAt ||
+            a.createdAt ||
+            0
+        )
+    );
 
-  const lines = [
+  const text = [
     "👥 <b>USER MANAGEMENT</b>",
     "",
-    `👤 Registered Users: <b>${users.length}</b>`,
+    `👤 Total Users: <b>${users.length}</b>`,
+    "",
+    "Select a user to view details.",
     "",
     "━━━━━━━━━━━━━━━━━━━━"
-  ];
+  ].join("\n");
 
-  if (!sortedUsers.length) {
-    lines.push(
-      "",
-      "📭 No registered users yet."
-    );
-  } else {
-    sortedUsers.forEach(
-      (user, index) => {
-        const name =
-          [
-            user.firstName,
-            user.lastName
-          ]
-            .filter(Boolean)
-            .join(" ") ||
-          "Unknown User";
+  const keyboard = [];
 
-        const username =
-          user.username
-            ? `@${user.username}`
-            : "No username";
+  sortedUsers
+    .slice(0, 20)
+    .forEach((user) => {
+      const username =
+        user.username
+          ? `@${user.username}`
+          : "No username";
 
-        lines.push(
-          "",
-          `${index + 1}. <b>${escapeHtml(name)}</b>`,
-          `   🔗 ${escapeHtml(username)}`,
-          `   🆔 <code>${escapeHtml(user.id)}</code>`
-        );
+      keyboard.push([
+        {
+          text:
+            `👤 ${getUserName(user).slice(
+              0,
+              22
+            )} — ${username.slice(
+              0,
+              18
+            )}`,
+          callback_data:
+            `admin:user:view:${user.id}`
+        }
+      ]);
+    });
+
+  keyboard.push(
+    [
+      {
+        text: "🔄 Refresh",
+        callback_data:
+          "admin:users"
       }
-    );
-  }
-
-  if (users.length > 20) {
-    lines.push(
-      "",
-      `ℹ️ Showing latest <b>20</b> users.`
-    );
-  }
+    ],
+    [
+      {
+        text: "🟢 Active Users",
+        callback_data:
+          "admin:user:active"
+      },
+      {
+        text: "🏆 Top Users",
+        callback_data:
+          "admin:user:top"
+      }
+    ],
+    [
+      {
+        text: "🔙 Dashboard",
+        callback_data:
+          "admin:dashboard"
+      }
+    ]
+  );
 
   await bot.sendMessage(
     chatId,
-    lines.join("\n"),
+    text,
     {
       parse_mode: "HTML",
       reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: "🔄 Refresh",
-              callback_data:
-                "admin:users"
-            }
-          ],
-          [
-            {
-              text: "🔙 Dashboard",
-              callback_data:
-                "admin:dashboard"
-            }
-          ]
-        ]
+        inline_keyboard:
+          keyboard
       }
     }
   );
@@ -496,95 +464,122 @@ async function sendCloudflareStatus(
   bot,
   chatId
 ) {
-  const loading =
+  const message =
     await bot.sendMessage(
       chatId,
-      [
-        "☁️ <b>CLOUDFLARE</b>",
-        "",
-        "⏳ Testing connection...",
-        "",
-        "Please wait."
-      ].join("\n"),
+      "☁️ <b>Cloudflare</b>\n\n⏳ Checking connection...",
       {
         parse_mode: "HTML"
       }
     );
 
-  const result =
-    await testCloudflareConnection();
-
-  const status =
-    result.success
-      ? "🟢 <b>CONNECTED</b>"
-      : "🔴 <b>CONNECTION FAILED</b>";
-
-  const text = [
-    "☁️ <b>CLOUDFLARE STATUS</b>",
-    "",
-    "━━━━━━━━━━━━━━━━━━━━",
-    "",
-    `Status: ${status}`,
-    "",
-    escapeHtml(
-      result.message ||
-        "No additional information."
-    ),
-    "",
-    "━━━━━━━━━━━━━━━━━━━━"
-  ].join("\n");
-
-  const keyboard = {
-    inline_keyboard: [
-      [
-        {
-          text: "🔄 Test Again",
-          callback_data:
-            "admin:cloudflare"
-        }
-      ],
-      [
-        {
-          text: "🔙 Dashboard",
-          callback_data:
-            "admin:dashboard"
-        }
-      ]
-    ]
-  };
-
   try {
+    const result =
+      await testCloudflareConnection();
+
+    const text = [
+      "☁️ <b>CLOUDFLARE STATUS</b>",
+      "",
+      "━━━━━━━━━━━━━━━━━━━━",
+      "",
+      "🟢 <b>Connection: ONLINE</b>",
+      "",
+      `👤 Account: <code>${escapeHtml(
+        result.accountId ||
+          config.adminIds.join(",")
+      )}</code>`,
+      "",
+      "🚀 Pages deployment service is ready.",
+      "",
+      "━━━━━━━━━━━━━━━━━━━━"
+    ].join("\n");
+
     await bot.editMessageText(
       text,
       {
         chat_id: chatId,
         message_id:
-          loading.message_id,
+          message.message_id,
         parse_mode: "HTML",
-        reply_markup:
-          keyboard
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text:
+                  "🔄 Test Again",
+                callback_data:
+                  "admin:cloudflare"
+              }
+            ],
+            [
+              {
+                text:
+                  "🔙 Dashboard",
+                callback_data:
+                  "admin:dashboard"
+              }
+            ]
+          ]
+        }
       }
     );
-  } catch {
-    try {
-      await bot.sendMessage(
-        chatId,
-        text,
-        {
-          parse_mode: "HTML",
-          reply_markup:
-            keyboard
+  } catch (error) {
+    console.error(
+      "Cloudflare status error:",
+      error
+    );
+
+    const text = [
+      "☁️ <b>CLOUDFLARE STATUS</b>",
+      "",
+      "━━━━━━━━━━━━━━━━━━━━",
+      "",
+      "🔴 <b>Connection: OFFLINE</b>",
+      "",
+      `❌ ${escapeHtml(
+        error.message ||
+          "Unable to connect to Cloudflare."
+      )}`,
+      "",
+      "Check:",
+      "• CLOUDFLARE_ACCOUNT_ID",
+      "• CLOUDFLARE_API_TOKEN",
+      "• API token permissions",
+      "",
+      "━━━━━━━━━━━━━━━━━━━━"
+    ].join("\n");
+
+    await bot.editMessageText(
+      text,
+      {
+        chat_id: chatId,
+        message_id:
+          message.message_id,
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text:
+                  "🔄 Try Again",
+                callback_data:
+                  "admin:cloudflare"
+              }
+            ],
+            [
+              {
+                text:
+                  "🔙 Dashboard",
+                callback_data:
+                  "admin:dashboard"
+              }
+            ]
+          ]
         }
-      );
-    } catch {
-      // Ignore Telegram errors.
-    }
+      }
+    );
   }
 }
-
-export {
-  isAdmin
-};
 
 export default {
   registerAdminHandler,
