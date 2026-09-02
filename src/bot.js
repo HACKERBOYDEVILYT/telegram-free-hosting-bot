@@ -1,5 +1,6 @@
 import TelegramBot from "node-telegram-bot-api";
 import config from "./config.js";
+import { registerUploadHandler } from "./handlers/upload.js";
 
 const bot = new TelegramBot(config.botToken, {
   polling: {
@@ -413,4 +414,5 @@ function escapeHtml(value) {
 // START BOT
 // ─────────────────────────────────────────────
 
+registerUploadHandler(bot);
 initializeBot();
