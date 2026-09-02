@@ -1,45 +1,30 @@
 import TelegramBot from "node-telegram-bot-api";
+
 import config from "./config.js";
+import {
+  createOrUpdateUser
+} from "./database.js";
+
 import { registerUploadHandler } from "./handlers/upload.js";
+import { registerProjectHandlers } from "./handlers/projects.js";
 
-const bot = new TelegramBot(config.botToken, {
-  polling: {
-    interval: 300,
-    autoStart: true,
-    params: {
-      timeout: 10
-    }
+const bot = new TelegramBot(
+  config.botToken,
+  {
+    polling: true
   }
-});
+);
 
-// ─────────────────────────────────────────────
-// BOT INFO
-// ─────────────────────────────────────────────
-
-let botInfo = null;
-
-async function initializeBot() {
-  try {
-    botInfo = await bot.getMe();
-
-    console.log("────────────────────────────────────");
-    console.log("🚀 Telegram Free Hosting Bot");
-    console.log("────────────────────────────────────");
-    console.log(`🤖 Bot: @${botInfo.username}`);
-    console.log(`🆔 ID: ${botInfo.id}`);
-    console.log("🟢 Status: Online");
-    console.log("────────────────────────────────────");
-  } catch (error) {
-    console.error("❌ Failed to initialize bot:", error.message);
-    process.exit(1);
-  }
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
-// ─────────────────────────────────────────────
-// MAIN MENU
-// ─────────────────────────────────────────────
-
-function getMainMenu() {
+function mainMenu() {
   return {
     reply_markup: {
       inline_keyboard: [
@@ -52,11 +37,11 @@ function getMainMenu() {
         [
           {
             text: "📁 My Projects",
-            callback_data: "my_projects"
+            callback_data: "projects:list"
           },
           {
             text: "👤 My Profile",
-            callback_data: "profile"
+            callback_data: "my_profile"
           }
         ],
         [
@@ -74,345 +59,364 @@ function getMainMenu() {
   };
 }
 
-// ─────────────────────────────────────────────
-// /START
-// ─────────────────────────────────────────────
+async function sendWelcome(chatId, user) {
+  const firstName =
+    escapeHtml(
+      user?.first_name || "there"
+    );
 
-bot.onText(/^\/start(?:\s+(.+))?$/, async (msg) => {
-  const chatId = msg.chat.id;
-  const firstName = msg.from?.first_name || "there";
+  const text = [
+    `👋 <b>Welcome, ${firstName}!</b>`,
+    "",
+    "🚀 <b>Telegram Free Hosting</b>",
+    "",
+    "Host your static website directly from Telegram.",
+    "",
+    "✨ <b>Features</b>",
+    "• ZIP website upload",
+    "• Automatic deployment",
+    "• Cloudflare Pages hosting",
+    "• Unique live URL",
+    "• Project management",
+    "• Fast deployment",
+    "",
+    "📦 Upload your website ZIP and we'll handle the rest."
+  ].join("\n");
 
-  const welcomeMessage = `
-╭──────────────────────────╮
-│   🚀 FREE WEB HOSTING    │
-╰──────────────────────────╯
-
-Hello, <b>${escapeHtml(firstName)}</b>! 👋
-
-Welcome to your <b>Free Hosting Bot</b>.
-
-You will be able to:
-
-🌐 Host your website
-📦 Upload ZIP projects
-📁 Manage projects
-🔄 Update & redeploy
-📊 Check your usage
-⚡ Get a hosting URL
-
-<b>100% Telegram-based management.</b>
-
-Choose an option below 👇
-`;
-
-  try {
-    await bot.sendMessage(chatId, welcomeMessage, {
-      parse_mode: "HTML",
-      ...getMainMenu()
-    });
-  } catch (error) {
-    console.error("❌ /start error:", error.message);
-  }
-});
-
-// ─────────────────────────────────────────────
-// HOST WEBSITE
-// ─────────────────────────────────────────────
-
-bot.on("callback_query", async (query) => {
-  const chatId = query.message.chat.id;
-  const data = query.data;
-
-  try {
-    await bot.answerCallbackQuery(query.id);
-
-    switch (data) {
-      case "host_website":
-        await showHostingInstructions(chatId);
-        break;
-
-      case "my_projects":
-        await showProjects(chatId);
-        break;
-
-      case "profile":
-        await showProfile(chatId, query.from);
-        break;
-
-      case "usage":
-        await showUsage(chatId);
-        break;
-
-      case "help":
-        await showHelp(chatId);
-        break;
-
-      case "main_menu":
-        await bot.sendMessage(
-          chatId,
-          "🏠 <b>Main Menu</b>\n\nChoose an option:",
-          {
-            parse_mode: "HTML",
-            ...getMainMenu()
-          }
-        );
-        break;
-
-      default:
-        await bot.sendMessage(
-          chatId,
-          "⚠️ This option is not available yet."
-        );
-    }
-  } catch (error) {
-    console.error("❌ Callback error:", error.message);
-
-    try {
-      await bot.sendMessage(
-        chatId,
-        "❌ Something went wrong. Please try again."
-      );
-    } catch {
-      // Ignore secondary Telegram errors.
-    }
-  }
-});
-
-// ─────────────────────────────────────────────
-// HOSTING INSTRUCTIONS
-// ─────────────────────────────────────────────
-
-async function showHostingInstructions(chatId) {
-  const message = `
-🚀 <b>Host Your Website</b>
-
-To create a website, send me a <b>ZIP file</b> containing your project.
-
-Example:
-
-📦 my-website.zip
- ├── index.html
- ├── style.css
- ├── script.js
- └── assets/
-
-<b>Requirements:</b>
-
-✅ ZIP format
-✅ Must contain index.html
-✅ HTML/CSS/JS supported
-✅ Maximum file size: ${config.maxFileSizeMB} MB
-
-After uploading, I will validate your project and prepare it for deployment.
-
-📤 <b>Send your ZIP file now.</b>
-`;
-
-  await bot.sendMessage(chatId, message, {
-    parse_mode: "HTML",
-    reply_markup: {
-      inline_keyboard: [
-        [
-          {
-            text: "🏠 Main Menu",
-            callback_data: "main_menu"
-          }
-        ]
-      ]
-    }
-  });
-}
-
-// ─────────────────────────────────────────────
-// PROJECTS
-// ─────────────────────────────────────────────
-
-async function showProjects(chatId) {
   await bot.sendMessage(
     chatId,
-    `
-📁 <b>My Projects</b>
-
-You don't have any hosted projects yet.
-
-Create your first website using:
-
-🚀 <b>Host Website</b>
-`,
+    text,
     {
       parse_mode: "HTML",
-      ...getMainMenu()
+      ...mainMenu()
     }
   );
 }
 
-// ─────────────────────────────────────────────
-// PROFILE
-// ─────────────────────────────────────────────
+async function showHostInstructions(chatId) {
+  const text = [
+    "🚀 <b>Host Your Website</b>",
+    "",
+    "Upload your website as a <b>.ZIP</b> file.",
+    "",
+    "📦 <b>ZIP requirements:</b>",
+    "• Must contain <code>index.html</code>",
+    "• HTML / CSS / JS supported",
+    "• Images and common assets supported",
+    "• Keep the package within the allowed size",
+    "",
+    "☁️ After upload, your website will be automatically deployed.",
+    "",
+    "🌐 You'll receive a live <b>.pages.dev</b> URL when deployment finishes.",
+    "",
+    "⬆️ <b>Now send your ZIP file.</b>"
+  ].join("\n");
+
+  await bot.sendMessage(
+    chatId,
+    text,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: "📁 My Projects",
+              callback_data: "projects:list"
+            }
+          ],
+          [
+            {
+              text: "🔙 Main Menu",
+              callback_data: "main_menu"
+            }
+          ]
+        ]
+      }
+    }
+  );
+}
 
 async function showProfile(chatId, user) {
-  const username = user.username
-    ? `@${escapeHtml(user.username)}`
-    : "Not set";
+  const text = [
+    "👤 <b>My Profile</b>",
+    "",
+    `🆔 <b>Telegram ID:</b> <code>${escapeHtml(user.id)}</code>`,
+    `👤 <b>Name:</b> ${escapeHtml(
+      [user.first_name, user.last_name]
+        .filter(Boolean)
+        .join(" ") || "Not set"
+    )}`,
+    `🔗 <b>Username:</b> ${
+      user.username
+        ? `@${escapeHtml(user.username)}`
+        : "Not set"
+    }`
+  ].join("\n");
 
-  const firstName = escapeHtml(user.first_name || "Unknown");
-
-  const message = `
-👤 <b>Your Profile</b>
-
-━━━━━━━━━━━━━━━━━━
-
-🧑 Name: <b>${firstName}</b>
-🔹 Username: <b>${username}</b>
-🆔 Telegram ID: <code>${user.id}</code>
-
-━━━━━━━━━━━━━━━━━━
-
-📁 Projects: <b>0</b>
-🌐 Websites: <b>0</b>
-💾 Storage: <b>0 MB</b>
-`;
-
-  await bot.sendMessage(chatId, message, {
-    parse_mode: "HTML",
-    ...getMainMenu()
-  });
+  await bot.sendMessage(
+    chatId,
+    text,
+    {
+      parse_mode: "HTML",
+      ...mainMenu()
+    }
+  );
 }
-
-// ─────────────────────────────────────────────
-// USAGE
-// ─────────────────────────────────────────────
 
 async function showUsage(chatId) {
-  const message = `
-📊 <b>Hosting Usage</b>
-
-━━━━━━━━━━━━━━━━━━
-
-📁 Projects: <b>0</b>
-💾 Storage Used: <b>0 MB</b>
-📦 Storage Limit: <b>100 MB</b>
-
-🌐 Active Websites: <b>0</b>
-
-━━━━━━━━━━━━━━━━━━
-
-🟢 Account Status: <b>ACTIVE</b>
-`;
-
-  await bot.sendMessage(chatId, message, {
-    parse_mode: "HTML",
-    ...getMainMenu()
-  });
+  await bot.sendMessage(
+    chatId,
+    [
+      "📊 <b>Usage</b>",
+      "",
+      "🚀 Free hosting usage is tracked per project.",
+      "",
+      "📁 Maximum projects: <b>10</b>",
+      `📦 Maximum package size: <b>${config.maxFileSizeMB} MB</b>`,
+      "",
+      "More detailed storage and bandwidth statistics will be added to the dashboard."
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      ...mainMenu()
+    }
+  );
 }
-
-// ─────────────────────────────────────────────
-// HELP
-// ─────────────────────────────────────────────
 
 async function showHelp(chatId) {
-  const message = `
-❓ <b>Hosting Bot Help</b>
-
-<b>How to host:</b>
-
-1️⃣ Press <b>🚀 Host Website</b>
-2️⃣ Prepare your website
-3️⃣ Put <code>index.html</code> in the project
-4️⃣ Create a ZIP file
-5️⃣ Send the ZIP here
-6️⃣ Bot validates your project
-7️⃣ Your website gets deployed 🌐
-
-<b>Supported:</b>
-
-• HTML
-• CSS
-• JavaScript
-• Images
-• Fonts
-• Static assets
-
-⚠️ Server-side applications will require a different deployment system.
-
-Need help? Use the main menu.
-`;
-
-  await bot.sendMessage(chatId, message, {
-    parse_mode: "HTML",
-    ...getMainMenu()
-  });
+  await bot.sendMessage(
+    chatId,
+    [
+      "❓ <b>Help Center</b>",
+      "",
+      "🚀 <b>How to host?</b>",
+      "1. Tap <b>Host Website</b>",
+      "2. Upload your website ZIP",
+      "3. Wait for deployment",
+      "4. Open your live URL",
+      "",
+      "📦 Your ZIP should contain:",
+      "<code>index.html</code>",
+      "",
+      "📁 <b>My Projects</b>",
+      "Manage your hosted websites from Telegram.",
+      "",
+      "⚠️ Only static websites are supported."
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      ...mainMenu()
+    }
+  );
 }
 
-// ─────────────────────────────────────────────
-// UNKNOWN COMMAND
-// ─────────────────────────────────────────────
+bot.onText(/^\/start(?:\s+.*)?$/i, async (message) => {
+  try {
+    const user = message.from;
 
-bot.on("message", async (msg) => {
-  if (!msg.text) return;
+    await createOrUpdateUser({
+      id: String(user.id),
+      username: user.username || "",
+      firstName: user.first_name || "",
+      lastName: user.last_name || ""
+    });
 
-  if (msg.text.startsWith("/")) {
-    const knownCommands = ["/start"];
+    await sendWelcome(
+      message.chat.id,
+      user
+    );
+  } catch (error) {
+    console.error(
+      "❌ /start error:",
+      error
+    );
 
-    const command = msg.text.split(" ")[0].toLowerCase();
+    await bot.sendMessage(
+      message.chat.id,
+      "❌ Something went wrong. Please try again."
+    );
+  }
+});
 
-    if (!knownCommands.includes(command)) {
-      await bot.sendMessage(
-        msg.chat.id,
-        "⚠️ Unknown command.\n\nUse /start to open the main menu."
+bot.on(
+  "callback_query",
+  async (query) => {
+    const chatId =
+      query.message?.chat?.id;
+
+    const user = query.from;
+    const data = query.data;
+
+    if (!chatId || !data) {
+      return;
+    }
+
+    try {
+      await bot.answerCallbackQuery(
+        query.id
       );
+
+      await createOrUpdateUser({
+        id: String(user.id),
+        username: user.username || "",
+        firstName: user.first_name || "",
+        lastName: user.last_name || ""
+      });
+
+      switch (data) {
+        case "main_menu":
+          await sendWelcome(
+            chatId,
+            user
+          );
+          break;
+
+        case "host_website":
+          await showHostInstructions(
+            chatId
+          );
+          break;
+
+        case "my_profile":
+          await showProfile(
+            chatId,
+            user
+          );
+          break;
+
+        case "usage":
+          await showUsage(
+            chatId
+          );
+          break;
+
+        case "help":
+          await showHelp(
+            chatId
+          );
+          break;
+
+        default:
+          // Project callbacks are handled
+          // by projects.js.
+          break;
+      }
+    } catch (error) {
+      console.error(
+        "❌ Callback error:",
+        error
+      );
+
+      try {
+        await bot.sendMessage(
+          chatId,
+          "❌ Something went wrong. Please try again."
+        );
+      } catch {
+        // Ignore Telegram errors.
+      }
     }
   }
-});
+);
 
-// ─────────────────────────────────────────────
-// TELEGRAM ERRORS
-// ─────────────────────────────────────────────
-
-bot.on("polling_error", (error) => {
-  console.error("⚠️ Telegram polling error:", error.message);
-});
-
-bot.on("error", (error) => {
-  console.error("⚠️ Telegram bot error:", error.message);
-});
-
-// ─────────────────────────────────────────────
-// GRACEFUL SHUTDOWN
-// ─────────────────────────────────────────────
-
-async function shutdown(signal) {
-  console.log(`\n🛑 Received ${signal}. Shutting down...`);
-
-  try {
-    await bot.stopPolling();
-    console.log("✅ Bot stopped safely.");
-  } catch (error) {
-    console.error("❌ Shutdown error:", error.message);
+bot.on(
+  "polling_error",
+  (error) => {
+    console.error(
+      "❌ Telegram polling error:",
+      error.message
+    );
   }
+);
 
-  process.exit(0);
-}
+bot.on(
+  "error",
+  (error) => {
+    console.error(
+      "❌ Telegram bot error:",
+      error.message
+    );
+  }
+);
 
-process.once("SIGINT", () => shutdown("SIGINT"));
-process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.on(
+  "SIGINT",
+  () => {
+    console.log(
+      "\n🛑 Stopping Telegram bot..."
+    );
 
-// ─────────────────────────────────────────────
-// HTML ESCAPE
-// ─────────────────────────────────────────────
+    bot.stopPolling();
 
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
+    process.exit(0);
+  }
+);
 
-// ─────────────────────────────────────────────
-// START BOT
-// ─────────────────────────────────────────────
+process.on(
+  "SIGTERM",
+  () => {
+    console.log(
+      "\n🛑 Stopping Telegram bot..."
+    );
+
+    bot.stopPolling();
+
+    process.exit(0);
+  }
+);
 
 registerUploadHandler(bot);
+registerProjectHandlers(bot);
+
+async function initializeBot() {
+  try {
+    const botInfo =
+      await bot.getMe();
+
+    console.log(
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    );
+
+    console.log(
+      "🤖 Telegram Hosting Bot"
+    );
+
+    console.log(
+      `👤 @${botInfo.username}`
+    );
+
+    console.log(
+      `🆔 ${botInfo.id}`
+    );
+
+    console.log(
+      "☁️ Cloudflare Pages deployment enabled"
+    );
+
+    console.log(
+      "📦 Upload handler enabled"
+    );
+
+    console.log(
+      "📁 Project manager enabled"
+    );
+
+    console.log(
+      "🚀 Bot is running..."
+    );
+
+    console.log(
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    );
+  } catch (error) {
+    console.error(
+      "❌ Failed to initialize bot:",
+      error
+    );
+
+    process.exit(1);
+  }
+}
+
 initializeBot();
