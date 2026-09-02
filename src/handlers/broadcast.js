@@ -1,4 +1,3 @@
-```js
 import {
   getUsers,
   isUserBlocked
@@ -862,4 +861,3 @@ async function safeAnswer(
     // Callback may already have been answered.
   }
 }
-```
