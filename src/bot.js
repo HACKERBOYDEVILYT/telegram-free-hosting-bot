@@ -26,6 +26,10 @@ import {
   registerAdminUsersHandler
 } from "./handlers/adminUsers.js";
 
+import {
+  registerBroadcastHandler
+} from "./handlers/broadcast.js";
+
 const bot = new TelegramBot(
   config.botToken,
   {
@@ -468,6 +472,7 @@ registerProjectHandlers(bot);
 registerAdminHandler(bot);
 registerAdminProjectsHandler(bot);
 registerAdminUsersHandler(bot);
+
 
 async function initializeBot() {
   try {
