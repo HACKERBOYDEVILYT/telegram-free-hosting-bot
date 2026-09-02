@@ -1,4 +1,3 @@
-```js
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -799,4 +798,3 @@ function escapeHtml(
       "&#039;"
     );
 }
-```
